@@ -7,6 +7,7 @@
 //   GET  /projects                          프로젝트 목록
 //   GET  /projects/<이름>                    프로젝트 JSON
 //   PUT  /projects/<이름>                    프로젝트 저장 (data: 미디어는 bin/media 로 풀고 ../media/<파일> 로 바꿈)
+//   DELETE /projects/<이름>                  프로젝트 삭제 (bin/media 의 미디어는 지우지 않음)
 //
 // 환경변수: CG_FILES_PORT(8081) CG_FILES_HOST(127.0.0.1) CG_MEDIA_DIR CG_PROJECT_DIR
 // 의존성 없음(Node 내장 모듈만).
@@ -48,7 +49,7 @@ function cors(req, res) {
     if (o === h || (loopback.includes(o) && loopback.includes(h))) {     // 에디터와 같은 호스트에서 온 요청만
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Methods', 'GET,PUT,OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,PUT,DELETE,OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Range');
       res.setHeader('Access-Control-Expose-Headers', 'Content-Range,Accept-Ranges,Content-Length');
     }
@@ -161,6 +162,10 @@ const server = http.createServer(async (req, res) => {
         if (req.method === 'GET') {
           const text = await fsp.readFile(target, 'utf8').catch(() => null);
           return text === null ? fail(res, 404, '프로젝트가 없습니다: ' + seg[1]) : (res.writeHead(200, {'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store'}), res.end(text));
+        }
+        if (req.method === 'DELETE') {
+          try { await fsp.unlink(target); } catch (e) { return e.code === 'ENOENT' ? fail(res, 404, '프로젝트가 없습니다: ' + seg[1]) : fail(res, 500, '삭제하지 못했습니다.'); }
+          return json(res, 200, {ok: true, name: file.replace(/\.json$/i, '')});
         }
         if (req.method === 'PUT') {
           let project;

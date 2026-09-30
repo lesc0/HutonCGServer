@@ -35,3 +35,4 @@ export const listProjectFiles = async (): Promise<{dir: string; projects: Projec
 export const loadProjectFile = async (name: string): Promise<unknown> => call('/projects/' + encodeURIComponent(name));
 export const saveProjectFile = async (name: string, project: Project): Promise<{name: string; updated: number; extractedMedia: number; project: Project}> =>
   call('/projects/' + encodeURIComponent(name), {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(project)});
+export const deleteProjectFile = async (name: string): Promise<{ok: boolean}> => call('/projects/' + encodeURIComponent(name), {method: 'DELETE'});

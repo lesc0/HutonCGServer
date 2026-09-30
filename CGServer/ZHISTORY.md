@@ -471,3 +471,11 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
 ### [cg-editor] In/Out 선택 표시, Run Setting 안내 문장 간격
 - Effects 탭 In/Out 버튼: 공통 버튼 색 규칙이 `.active` 색을 덮어써서 선택 구분이 안 되던 문제 수정(선택=파란색, 미선택=어두운 회색). 같은 종류의 `.checks`/`.facebuttons` 토글에도 적용.
 - Run Setting 탭: "Manual은 페이지 끝에서 멈춥니다…" 안내 문장을 버튼 줄과 분리해 한 줄 전체를 쓰고 두 줄(30px) 간격을 둠.
+
+### [cg-editor] 프로젝트 삭제, 팝업/툴바/미리보기 수정
+- 프로젝트 열기 목록에 **삭제 버튼**(휴지통) 추가: 확인창 후 `bin/project/<이름>.json` 삭제, 현재 열려 있는 프로젝트는 삭제 불가, `bin/media` 는 지우지 않음.
+  파일 서버에 `DELETE /projects/<이름>` 추가(이름 정리·없는 파일 404). 기존 서버 프로세스는 재시작해야 적용됨(`stop`/`start`).
+- 프로젝트 열기 팝업에서 패널 경계선(`.rowsplit`, z-index 20)이 선택되던 문제: 팝업 배경 z-index 100, 우클릭 메뉴 101 로 상향.
+- 툴바 첫 번째 버튼을 "새 페이지" → **"새 프로젝트"** 로 변경(파일 메뉴와 동일 함수 `newProject`, 수정 사항이 있으면 확인창). 새 페이지는 Page List "+ 추가"와 삽입 메뉴에 있음.
+- Timeline Preview 가 2페이지로 넘어가던 문제: Run Setting 의 Apply to Playback / All File Playback 으로 켜진 "이어서 재생(sequence)" 상태를 단일 페이지 미리보기(Timeline Preview, Effects Preview, 보기>미리보기, F5)가 끄지 않던 것이 원인 → 미리보기 시작 시 `sequence.current=false`.
+  재현(Apply 후 Preview → 0.7초 만에 Page 2)과 수정 후(Page 1 유지) 확인.
