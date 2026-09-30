@@ -28,3 +28,20 @@ assert.deepEqual(playbackStep(ps,{...rs,allPages:false,startPage:2,endPage:2},1,
 const rp={...project,pages:ps,runSettings:{...rs,startPage:2,endPage:3}};
 assert.deepEqual(normalizeProject(JSON.parse(JSON.stringify(rp)))?.runSettings,rp.runSettings);
 console.log('Page sequence, manual stop, range playback, repeat delay, repeat limit and Run Setting JSON roundtrip: passed');
+
+const {channelStep,idleChannel,channelOrder,projectMedia}=await import('../app/model');
+const running={...idleChannel(),visible:true,playing:true};
+assert.deepEqual(channelStep(running,2.5,2,0,1),{...running,time:2.5});
+assert.deepEqual(channelStep({...running,time:2.5},1,2,0,1),{...running,time:.5,cycle:2});
+assert.deepEqual(channelStep(running,6.1,2,2,1),{...running,time:2,cycle:2,playing:false,visible:false});
+assert.deepEqual(channelStep(running,2.1,2,0,0,true),{...running,time:2,playing:false});
+assert.deepEqual(channelStep({...running,playing:false},100,2,0),{...running,playing:false});
+const stamp={name:'Stamp',page:ps[0],position:'top' as const,mode:'auto' as const,loops:100,delay:.5};
+assert.deepEqual(channelOrder([stamp,stamp]),{bottom:[],top:[1,0]});
+assert.deepEqual(channelOrder([{...stamp,position:'bottom'},{...stamp,position:'bottom'}]),{bottom:[1,0],top:[]});
+const vp=make('video',{src:'data:video/mp4;base64,AAAA',duration:10});
+const cp={...project,channels:{stamps:[stamp,{...stamp,position:'bottom' as const}],global:{video:vp,loops:3,mark:true,start:2,end:8}}};
+assert.deepEqual(normalizeProject(JSON.parse(JSON.stringify(cp)))?.channels,cp.channels);
+assert.ok(projectMedia(cp).flat().some(i=>i.src===vp.src));
+assert.equal(normalizeProject({...cp,channels:{...cp.channels,global:{...cp.channels.global,video:{...vp,src:'https://evil.invalid/x.mp4'}}}}),null);
+console.log('Independent channels, layer order, delay, finite/infinite loops, pause, manual stop, mark/settings JSON roundtrip and channel media packing: passed');

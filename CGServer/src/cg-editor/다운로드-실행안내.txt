@@ -1,20 +1,27 @@
-CG 문자 편집기 React 소스 — NAVI(2) 추가 캡처 기반 수정본
+CG 문자 편집기 — Stamp / Global Animation 추가판
 
-Node.js 22.13 이상을 설치하고 ZIP을 풀어 cg-editor 폴더에서 실행:
+Node.js 22.13 이상 설치 → ZIP 압축 해제 → cg-editor 폴더에서 터미널 실행:
 npm ci
 npm run dev
 터미널에 표시되는 localhost 주소를 Chrome에서 엽니다.
+설치형 EXE가 아닌 React 소스 프로젝트입니다.
 
-PC JSON 저장·불러오기는 서버 계정 없이 사용 가능합니다.
-서버 저장은 Cloudflare D1/R2와 Sites 인증 환경이 필요합니다.
+Stamp Playback:
+JSON 연결로 CG 프로젝트 첫 페이지를 채널 1/2에 연결합니다.
+Top/Bottom 위치, Auto/Manual, 반복 횟수와 지연 시간을 설정합니다.
+Loop 100은 무한 반복입니다. Pause는 Roll/Crawl 페이지에서 사용합니다.
+Refresh는 지원 브라우저에서는 연결 파일을 다시 읽으며, 미지원 환경에서는 재선택합니다.
 
-Run Setting: 전체 또는 시작/끝 페이지 구간, 반복 횟수, 반복 대기 시간 설정.
-All File Playback: 설정한 구간을 재생합니다.
-Manual (In): 각 페이지 끝에서 정지. Skip 후 In으로 다음 페이지를 재생합니다.
-Clear: 미리보기 화면을 지웁니다. Cut: In 효과가 끝난 상태를 표시합니다.
+Global Animation Playback:
+MP4/WebM/MOV 파일을 배경 영상으로 연결합니다 (브라우저 코덱 지원 필요).
+On Air ON은 합성 미리보기 가장 아래에 표시합니다.
+Play/Pause/Stop/Rewind, Loop, Mark Start/End, 일시정지 중 위치 이동을 지원합니다.
+Loop 0은 무한 반복이며 영상은 최대 100MB, 1시간을 사용합니다.
+합성 결과는 Playback 탭의 효과 미리보기에서 확인합니다.
 
-JSON 복원, 타임라인, 글자 서식, 효과 계산, 페이지 재생 순서, 서버 API 자동 검증을 통과했습니다.
-실제 브라우저에서 파일 선택창과 패널 조작을 직접 검증한 상태는 아닙니다.
-원본 NABI 효과의 픽셀 단위 동일성을 보장하지 않습니다.
-Stamp Playback 및 Global Animation Playback 전용 기능은 아직 구현되지 않았습니다.
-이 ZIP은 설치형 EXE가 아닌 소스 프로젝트입니다.
+JSON 저장에는 채널 설정과 미디어가 함께 포함됩니다.
+PC JSON 저장/열기는 서버 계정 없이 사용합니다.
+서버 저장은 D1/R2 및 Sites 인증 환경이 필요합니다.
+NABI 독자 형식 NBI/TAD 가져오기와 방송 장비 송출은 지원하지 않습니다.
+자동 검증: JSON 복원, 레이어 순서, 독립 재생, 반복/지연, 일시정지, 구간 설정, 서버 API 통과.
+실제 브라우저 직접 조작 검증은 환경 제한으로 미실시입니다.

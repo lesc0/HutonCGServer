@@ -4,6 +4,12 @@
 
 ## 2026-10-01
 
+### cg-editor3(doc/gptcode) 수정분 병합
+- 내용: Stamp Playback(두 자막 채널, Top/Bottom 배치, 독립 재생·정지·반복·갱신), Global Animation Playback(배경 영상, On Air, 재생·일시정지·되감기, 구간 재생), 채널 설정·미디어 JSON 저장/복원.
+- 방식: 덮어쓰기 없이 3-way 병합. 기준은 `CG-editor-source2.zip`, 내 쪽은 기존 src/cg-editor, 상대는 cg-editor3. 충돌 없음.
+- 대상: app/channels.tsx(신규), editor-canvas.tsx, globals.css, model.ts, page.tsx, tests/editor-checks.ts, 다운로드-실행안내.txt.
+- 확인: `tsc --noEmit` 통과. 화면 동작은 브라우저 확인 필요. 커밋/푸시는 아직 안 함.
+
 ### cg-editor2(doc/gptcode) 수정분 병합
 - 내용: Run Setting(페이지 구간·반복 횟수·대기·자동/수동), Playback(Clear·Cut·Skip·이전/다음), 효과 프리셋 수·Soft/Hard 보완.
 - 방식: 덮어쓰기 없이 3-way 병합. 기준(base)은 `doc/gptcode/CG-editor-source.zip`, 내 쪽은 기존 src/cg-editor, 상대는 cg-editor2.
