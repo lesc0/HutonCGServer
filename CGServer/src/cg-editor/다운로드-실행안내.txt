@@ -1,0 +1,20 @@
+CG 문자 편집기 React 소스 — NAVI(2) 추가 캡처 기반 수정본
+
+Node.js 22.13 이상을 설치하고 ZIP을 풀어 cg-editor 폴더에서 실행:
+npm ci
+npm run dev
+터미널에 표시되는 localhost 주소를 Chrome에서 엽니다.
+
+PC JSON 저장·불러오기는 서버 계정 없이 사용 가능합니다.
+서버 저장은 Cloudflare D1/R2와 Sites 인증 환경이 필요합니다.
+
+Run Setting: 전체 또는 시작/끝 페이지 구간, 반복 횟수, 반복 대기 시간 설정.
+All File Playback: 설정한 구간을 재생합니다.
+Manual (In): 각 페이지 끝에서 정지. Skip 후 In으로 다음 페이지를 재생합니다.
+Clear: 미리보기 화면을 지웁니다. Cut: In 효과가 끝난 상태를 표시합니다.
+
+JSON 복원, 타임라인, 글자 서식, 효과 계산, 페이지 재생 순서, 서버 API 자동 검증을 통과했습니다.
+실제 브라우저에서 파일 선택창과 패널 조작을 직접 검증한 상태는 아닙니다.
+원본 NABI 효과의 픽셀 단위 동일성을 보장하지 않습니다.
+Stamp Playback 및 Global Animation Playback 전용 기능은 아직 구현되지 않았습니다.
+이 ZIP은 설치형 EXE가 아닌 소스 프로젝트입니다.

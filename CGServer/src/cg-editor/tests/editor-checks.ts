@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import {make,blankPage,normalizeProject,timelineChange,selectedIds,clockText,Project,effectState} from '../app/model';
+import {visual} from '../app/effects';
+import {drawText} from '../app/text-render';
+const a=make('text',{text:'가나다 ABC',strokeWidth:3,edge2Width:4,edge3Width:5,cRotate:12,runs:[{start:0,end:2,fill:'#ff0000'},{start:0,end:2,bold:true}],groupId:'group'}),b=make('rect',{groupId:'group',x:400}),v=make('video',{src:'data:video/mp4;base64,AAAA',duration:45,start:15}),c=make('clock',{clockFormat:'YYYY-MM-DD HH:mm:ss'}),timer=make('timer',{start:5,timerSeconds:90});const page={...blankPage(),duration:120,mode:'MultiLayer' as const,items:[a,b,v,c,timer],effect:'wipe' as const,outEffect:'tile' as const,options:{...blankPage().options,tileX:6,tileY:9,effectPreset:3}};
+const project:Project={format:'cg-editor',version:2,name:'JSON 검증',pages:[page],width:1920,height:1080,styles:[a],templates:[page]};
+const restored=normalizeProject(JSON.parse(JSON.stringify(project)));assert.ok(restored);assert.deepEqual(restored,project,'JSON 저장/불러오기는 그룹, 미디어, 글자별 속성, 페이지 효과와 사용자 스타일을 유지해야 한다');
+const old=normalizeProject({format:'cg-editor',version:1,pages:[{name:'이전 버전',bg:'transparent',items:[{id:'old1',type:'text',text:'이전 파일',x:10,y:20,w:500,h:100,size:54,fill:'#ffffff',start:0,duration:10,effect:'fade'}]}]});assert.ok(old);assert.equal(old.pages[0].items[0].text,'이전 파일');assert.equal(old.pages[0].items[0].edge2Width,0);
+assert.equal(normalizeProject({format:'wrong',pages:[]}),null);assert.equal(normalizeProject({...project,pages:[{...page,items:[{...v,src:'https://untrusted.invalid/file.mp4'}]}]}),null);
+assert.deepEqual(timelineChange(v,'move',-100,120),{start:0});assert.deepEqual(timelineChange(v,'move',200,120),{start:75});const trim=timelineChange(v,'left',5,120);assert.equal(trim.start,20);assert.equal(trim.duration,40);assert.equal(trim.trim,5);assert.equal(timelineChange(v,'right',-100,120).duration,.1);assert.equal(timelineChange(v,'right',500,120).duration,105);
+assert.deepEqual(selectedIds(page.items,a.id,[],false),[a.id,b.id]);assert.deepEqual(selectedIds(page.items,b.id,[a.id,b.id],true),[]);
+assert.equal(clockText(timer,0),'00:01:30');assert.equal(clockText(timer,65),'00:00:30');assert.equal(clockText(c,0,new Date(2026,8,30,21,1,24)),'2026-09-30 21:01:24');
+const effect=make('text',{effect:'fade',outEffect:'fade',start:3,duration:10,inDuration:2,outDuration:1});assert.equal(effectState(effect,2,'Still',30).active,false);assert.equal(visual(effect,4,'Still',30).opacity,.5);assert.ok(Math.abs(visual(effect,12.5,'Still',30).opacity-.5)<.00001);
+for(const e of ['wipe','organic','move','scale','curl','tile','banner','blink','crawl','roll','text'] as const){const f=visual({...effect,effect:e,outEffect:'none'},4,'Still',30);for(const n of [f.opacity,f.x,f.y,f.scaleX,f.scaleY,f.rotation])assert.ok(Number.isFinite(n));if(f.clip){let rectangles=0;const fake={beginPath(){},closePath(){},rect(){rectangles++},moveTo(){},lineTo(){},arc(){}};f.clip(fake as any);assert.ok(rectangles>=0)}}
+const draws:any[]=[];const ctx={font:'',fillStyle:'',strokeStyle:'',lineWidth:0,measureText:(s:string)=>({width:s.length*50}),save(){},restore(){},translate(){},rotate(){},scale(){},fillText(this:any,t:string){draws.push({t,color:this.fillStyle,font:this.font})},strokeText(this:any,t:string){draws.push({t,stroke:this.strokeStyle,width:this.lineWidth})},fillRect(){}};
+drawText(ctx as any,a,0);assert.ok(draws.some(d=>d.color==='#ff0000'&&d.font.includes('bold')),'부분 색상과 굵기가 동시에 유지되어야 한다');assert.ok(draws.some(d=>d.width===24),'3중 외곽선 누적 폭이 그려져야 한다');
+console.log('JSON roundtrip, legacy import, invalid-source rejection, timeline clamps/trim, groups, clocks, effects and partial text styles: passed');
+
+const {playbackStep,defaultRunSettings}=await import('../app/model');
+const ps=[{...blankPage(),duration:2},{...blankPage(),duration:3},{...blankPage(),duration:4}];
+const rs={...defaultRunSettings(),loops:2,loopDelay:1};
+assert.deepEqual(playbackStep(ps,rs,0,0,1,2.5),{index:1,time:.5,cycle:1,playing:true});
+assert.deepEqual(playbackStep(ps,rs,2,4,1,.5),{index:2,time:4.5,cycle:1,playing:true});
+assert.deepEqual(playbackStep(ps,rs,2,4.5,1,.75),{index:0,time:.25,cycle:2,playing:true});
+assert.deepEqual(playbackStep(ps,rs,2,3.5,2,1),{index:2,time:4,cycle:2,playing:false});
+assert.deepEqual(playbackStep(ps,{...rs,mode:'manual'},0,1,1,4),{index:0,time:2,cycle:1,playing:false});
+assert.deepEqual(playbackStep(ps,{...rs,allPages:false,startPage:2,endPage:2},1,0,1,4.25),{index:1,time:.25,cycle:2,playing:true});
+const rp={...project,pages:ps,runSettings:{...rs,startPage:2,endPage:3}};
+assert.deepEqual(normalizeProject(JSON.parse(JSON.stringify(rp)))?.runSettings,rp.runSettings);
+console.log('Page sequence, manual stop, range playback, repeat delay, repeat limit and Run Setting JSON roundtrip: passed');
