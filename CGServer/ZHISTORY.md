@@ -435,3 +435,15 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
 - 이전의 "날짜를 붙여 새 파일로 저장" 버튼과 3개 저장 버튼은 제거.
 - 확인(Chrome CDP): 새 이름으로 저장 → 이름 창 표시 → 임시 이름 저장 성공, 이어서 프로젝트 저장 → 창/확인창 없이 파일 갱신.
   테스트 임시 파일은 삭제(기존 `test.json`, `test1.json`, `자막프로젝트.json` 은 그대로).
+
+### 커밋/푸시 (2026-10-01)
+- `c1693c7` 실행엔진(cg-streamer) 구현, 에디터 화면/저장 구조 개편 → `origin/main` 푸시 (`040d475..c1693c7`, 31개 파일).
+  - 앞서 100MB 초과 파일(`doc/cef/cef_custom_130_arm64.tar.gz`) 때문에 거부된 푸시는 커밋을 합치고 해당 파일을 제외해 `eff7b0c` 로 해결.
+- 커밋하지 않은 것: `src/cg-editor/tsconfig.tsbuildinfo`(빌드 산출물), `bin/project/` 의 사용자 테스트 파일(`test.json`, `test1.json`, `자막프로젝트.json`),
+  `bin/media/` 의 샘플 미디어(`.gitignore` 로 제외, `.gitkeep` 만 추적).
+- 푸시 전에 발견/조치:
+  - 사용자 커밋 `040d475 delete bin/web` 이 같은 경로를 지우며 `bin/web/player.html` 이 디스크에서 사라짐 → 같은 내용으로 재생성해 커밋.
+  - 줄바꿈 자동 변환(`core.autocrlf=true`) 때문에 `.sh` 가 보드에서 CRLF 로 깨질 수 있어 `.gitattributes` 추가(`*.sh eol=lf`, `*.bat eol=crlf`).
+- 남은 일: **C++ 변경(`main.cpp`, CMake)은 Windows 에서 빌드하지 못해 컴파일 미검증** → 보드에서
+  `cd src/cg-streamer && cmake --preset rk3588 && cmake --build --preset rk3588` 후 `bin/cg-streamer --run --project=project/<이름>.json` 확인 필요.
+  브라우저에서의 미디어 선택·저장/열기 실제 조작은 CDP 스크립트 수준으로만 확인.
