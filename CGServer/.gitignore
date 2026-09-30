@@ -1,6 +1,7 @@
 build/
 bin/web/girsday.mp4
-lib/
+lib/*.so
+lib/*.so.*
 node_modules/
 src/editor/client/dist/
 src/editor/server/templates.json
