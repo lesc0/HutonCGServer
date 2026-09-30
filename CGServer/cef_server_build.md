@@ -82,7 +82,7 @@ python3 automate-git.py --download-dir=$HOME/code/chromium_git \
 ```bash
 sudo tar xjf cef_binary_*_linuxarm64_minimal.tar.bz2 -C /opt/cef
 export CEF_ROOT=/opt/cef/<새 폴더>          # ~/.bashrc 의 CEF_ROOT 도 수정
-cd /root/work/test_cef_mpp && rm -rf build/rk3588
+cd /root/work/CGServer && rm -rf build/rk3588
 cmake --preset rk3588 && cmake --build --preset rk3588
 ```
 
