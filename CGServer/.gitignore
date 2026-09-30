@@ -1,0 +1,5 @@
+build/
+bin/web/girsday.mp4
+lib/
+node_modules/
+src/editor/client/dist/

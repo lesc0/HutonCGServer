@@ -5,24 +5,29 @@ HTML/CSS로 그린 방송 그래픽(자막·티커·이미지)을 CEF 오프스�
 
 ## 구성
 ```
-test_cef_mpp/
-├─ main.cpp          모드(--edit/--run), CEF 클라이언트, cefQuery 브릿지, UDP 제어, 인코딩 루프, UI 지터 버퍼,
-│                    로컬 미리보기 창(--preview, X11)
-├─ mpp_encoder.*     RGA(BGRA→NV12, 영상+UI 합성) + MPP H.264 인코더 (1080p60 CBR 8Mbps) + 미리보기용 BGRX 추출
-├─ video_source.*    mp4 → libavformat 분리 → MPP 하드웨어 디코딩 (영상 합성용)
-├─ hdmirx_source.*   HDMI 입력(rk_hdmirx, V4L2) → dmabuf 프레임 (라이브 소스 합성용)
-├─ dma_heap_buf.h    /dev/dma_heap dmabuf 할당 (RGA 가 fd 로 직접 접근)
-├─ ts_muxer.*        libavformat MPEG-TS 먹서 (UDP/파일)
+CGServer/
+├─ src/
+│  ├─ cef_mpp/       C++ 구현체
+│  │  ├─ main.cpp         모드(--edit/--run), CEF 클라이언트, cefQuery 브릿지, UDP 제어, 인코딩 루프,
+│  │  │                   UI 지터 버퍼, 로컬 미리보기 창(--preview, X11)
+│  │  ├─ mpp_encoder.*    RGA(BGRA→NV12, 영상+UI 합성) + MPP H.264 인코더(1080p60 CBR 8Mbps) + 미리보기 BGRX 추출
+│  │  ├─ video_source.*   mp4 → libavformat 분리 → MPP 하드웨어 디코딩 (영상 합성용)
+│  │  ├─ hdmirx_source.*  HDMI 입력(rk_hdmirx, V4L2) → dmabuf 프레임 (라이브 소스 합성용)
+│  │  └─ ts_muxer.*       libavformat MPEG-TS 먹서 (UDP/파일)
+│  └─ editor/        원격/로컬 저작용 Node(Express) + React (신규, 진행 중)
+├─ inc/              헤더(mpp_encoder.h, video_source.h, hdmirx_source.h, dma_heap_buf.h, ts_muxer.h)
+├─ lib/              벤더 라이브러리(ffmpeg/mpp/rga/x11 include+lib, apt 패키지에서 추출) + lib_arm64.tgz
+├─ bin/
+│  ├─ cgctl.sh       실행 중 제어 (next/prev/goto/quit/status)
+│  └─ web/           런타임 웹 리소스 (빌드 시 실행 파일 옆으로 복사됨)
+│     ├─ editor.html GrapesJS 저작 화면 (페이지 단위)
+│     ├─ player.html 실행용 플레이어 (로딩 완료 → ready 신호, 페이지별 영상 요청)
+│     ├─ girsday.html <video> 데모 페이지 (시스템 Chromium에서 MPP 디코딩 확인용)
+│     ├─ girsday.mp4 테스트 영상 (1080p H.264, git 제외)
+│     ├─ cg.css      공유 애니메이션 (페이드/슬라이드/롤링)
+│     └─ grapes.min.* GrapesJS 0.23.6 (오프라인 포함, 라이선스 파일 동봉)
 ├─ CMakeLists.txt, CMakePresets.json   (프리셋: rk3588, rk3588-accel)
-├─ cgctl.sh          실행 중 제어 (next/prev/goto/quit/status)
-├─ web/
-│  ├─ editor.html    GrapesJS 저작 화면 (페이지 단위)
-│  ├─ player.html    실행용 플레이어 (로딩 완료 → ready 신호, 페이지별 영상 요청)
-│  ├─ girsday.html   <video> 데모 페이지 (시스템 Chromium에서 MPP 디코딩 확인용)
-│  ├─ girsday.mp4    테스트 영상 (1080p H.264, 영상 합성 예제에서 사용)
-│  ├─ cg.css         공유 애니메이션 (페이드/슬라이드/롤링)
-│  └─ grapes.min.*   GrapesJS 0.23.6 (오프라인 포함, 라이선스 파일 동봉)
-└─ cef_server_build.md             Rockchip 패치 CEF 서버 빌드 가이드 (<video> MPP 디코딩용)
+└─ cef_server_build.md   Rockchip 패치 CEF 서버 빌드 가이드 (<video> MPP 디코딩용)
 ```
 
 ## 데이터 흐름
@@ -53,7 +58,7 @@ sudo apt install build-essential ninja-build pkg-config git \
 
 ## 빌드
 ```bash
-cd /root/work/test_cef_mpp
+cd /root/work/CGServer
 cmake --preset rk3588            # 최초 1회 (CEF_ROOT 환경변수 사용)
 cmake --build --preset rk3588    # → build/rk3588/Release/cef_mpp (+ libcef.so, 리소스, web/ 복사)
 ```
@@ -65,10 +70,10 @@ cmake --build --preset rk3588    # → build/rk3588/Release/cef_mpp (+ libcef.so
 ## 실행
 실행 파일 폴더에서 실행한다(옆의 `libcef.so`, `*.pak`, `web/` 사용).
 ```bash
-cd /root/work/test_cef_mpp/build/rk3588/Release
+cd /root/work/CGServer/build/rk3588/Release
 
 # 송출 (기본 udp://127.0.0.1:1234)
-./cef_mpp --run --project=/root/work/test_cef_mpp/build/image_project.json
+./cef_mpp --run --project=/root/work/CGServer/build/image_project.json
 ./cef_mpp --run --project=... --udp=10.10.10.11:1234        # 유니캐스트
 ./cef_mpp --run --project=... --udp=239.1.1.1:1234          # 멀티캐스트
 ./cef_mpp --run --project=... --out=capture.ts --seconds=30 # 파일(TS) 30초
@@ -107,14 +112,14 @@ DISPLAY=:0 XAUTHORITY=/home/pi/.Xauthority ./cef_mpp --run --view \
 ### 실행 중 제어 (UDP 127.0.0.1:5555)
 SSH 로 보드에 접속해서 `cgctl.sh` 로 제어한다 (보드 자신에게서 온 UDP 만 받음).
 ```bash
-cd /root/work/test_cef_mpp
+cd /root/work/CGServer
 ./cgctl.sh next       # 다음 페이지 (페이지의 video 설정에 따라 mp4/HDMI 소스도 전환)
 ./cgctl.sh prev       # 이전 페이지
 ./cgctl.sh goto 2     # N번째 페이지 (1부터)
 ./cgctl.sh quit       # 종료
 ./cgctl.sh status     # 실행 여부 + 최근 로그/[stat]
 ```
-다른 PC에서: `ssh pi@<보드IP> /root/work/test_cef_mpp/cgctl.sh next`
+다른 PC에서: `ssh pi@<보드IP> /root/work/CGServer/cgctl.sh next`
 
 직접 보내기:
 ```bash
@@ -128,7 +133,7 @@ echo quit   | nc -u -w0 127.0.0.1 5555    # 종료
 ### 로그
 ```
 [cg] run: project=... out=... paint=software paint_fps=60 sync=jitter-buffer(3)
-[video] play /root/work/test_cef_mpp/web/girsday.mp4 (h264, 23.976fps)
+[video] play /root/work/CGServer/web/girsday.mp4 (h264, 23.976fps)
 [stat] enc=60.0fps paint=60/s out=8.03Mbps rga=3.3ms video=on uiq=2 under=0 drop=0 accel_fail=0
 ```
 | 항목 | 의미 |
@@ -152,7 +157,7 @@ HTML UI 아래에 합성한다. libcef 재빌드 불필요.
 ```json
 { "bg": "transparent",
   "pages": [ { "html": "...", "css": "...",
-               "video": "/root/work/test_cef_mpp/web/girsday.mp4",
+               "video": "/root/work/CGServer/web/girsday.mp4",
                "videoRect": [60, 110, 1280, 720] } ] }
 ```
 - `video`: 파일 경로(상대경로면 프로젝트 파일 기준). H.264/H.265/VP9/VP8, 끝나면 반복 재생.

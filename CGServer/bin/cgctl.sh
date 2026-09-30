@@ -3,7 +3,7 @@
 #   ./cgctl.sh next | prev | goto N | quit | status
 # 명령은 UDP 127.0.0.1:5555 로 전달된다 (cef_mpp --run 이 수신).
 PORT=${CG_CTL_PORT:-5555}
-LOG=${CG_LOG:-$(dirname "$(readlink -f "$0")")/build/run_udp.log}
+LOG=${CG_LOG:-$(dirname "$(readlink -f "$0")")/../build/run_udp.log}
 
 send() { printf '%s\n' "$1" | nc -u -w0 127.0.0.1 "$PORT" && echo "보냄: $1"; }
 

@@ -29,7 +29,12 @@ endif()
 # libcef.so 자체 (wrapper 만으로는 cef_string_* 등 C API 심볼이 없음)
 ADD_LOGICAL_TARGET("libcef_lib" "${CEF_LIB_DEBUG}" "${CEF_LIB_RELEASE}")
 
-add_executable(cef_mpp main.cpp mpp_encoder.cpp ts_muxer.cpp video_source.cpp hdmirx_source.cpp)
+add_executable(cef_mpp
+  src/cef_mpp/main.cpp
+  src/cef_mpp/mpp_encoder.cpp
+  src/cef_mpp/ts_muxer.cpp
+  src/cef_mpp/video_source.cpp
+  src/cef_mpp/hdmirx_source.cpp)
 option(ENABLE_ACCEL_PAINT "OnAcceleratedPaint(dmabuf) 실험 경로 (--accel)" OFF)
 if(ENABLE_ACCEL_PAINT)
   target_compile_definitions(cef_mpp PRIVATE CG_ACCEL=1)
@@ -37,7 +42,7 @@ endif()
 SET_EXECUTABLE_TARGET_PROPERTIES(cef_mpp)
 add_dependencies(cef_mpp libcef_dll_wrapper)
 target_link_libraries(cef_mpp libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} rockchip_mpp rga PkgConfig::FFMPEG pthread ${X11_LIBRARIES} ${X11_Xext_LIB})
-target_include_directories(cef_mpp PRIVATE ${X11_INCLUDE_DIR})
+target_include_directories(cef_mpp PRIVATE ${X11_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/inc)
 
 # CEF 런타임 파일(libcef.so, pak, icudtl 등)을 실행 파일 옆으로 복사
 set(CEF_TARGET_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIGURATION>)
@@ -48,4 +53,4 @@ COPY_FILES(cef_mpp "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${CEF_TARGET_O
 # 저작/플레이어 웹 리소스(GrapesJS 포함)를 실행 파일 옆 web/ 으로 복사
 add_custom_command(TARGET cef_mpp POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory
-          ${CMAKE_CURRENT_SOURCE_DIR}/web ${CEF_TARGET_OUT_DIR}/web)
+          ${CMAKE_CURRENT_SOURCE_DIR}/bin/web ${CEF_TARGET_OUT_DIR}/web)
