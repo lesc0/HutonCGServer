@@ -3,3 +3,5 @@ bin/web/girsday.mp4
 lib/
 node_modules/
 src/editor/client/dist/
+src/editor/server/templates.json
+src/editor/server/cg_projects/

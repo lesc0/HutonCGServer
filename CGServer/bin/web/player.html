@@ -14,10 +14,13 @@
 <script>
 let proj = null, idx = 0;
 
-function show(i) {
-  if (!proj) return;
-  idx = Math.max(0, Math.min(proj.pages.length - 1, i));
-  const p = proj.pages[idx];
+// 매뉴얼 8-3장의 페이지 IN 효과 중 CUT/Fade 최소 구현.
+// speed(1~10, 10이 가장 빠름)를 대략적인 ms로 환산(정확한 초 단위 스펙이 없어 근사치).
+function speedToMs(speed) {
+  return Math.max(80, 600 - (speed || 5) * 50);
+}
+
+function swapContent(p) {
   document.getElementById('pcss').textContent = p.css || '';
   const t = document.createElement('div');
   t.innerHTML = p.html || '';               // <body> 태그는 파서가 제거
@@ -31,6 +34,28 @@ function show(i) {
     } else {
       q('video:stop').catch(() => {});
     }
+  }
+}
+
+function show(i) {
+  if (!proj) return;
+  idx = Math.max(0, Math.min(proj.pages.length - 1, i));
+  const p = proj.pages[idx];
+  const eff = p.effectIn || { type: 'cut' };
+  const stage = document.getElementById('stage');
+  if (eff.type === 'fade') {
+    const dur = speedToMs(eff.speed);
+    stage.style.transition = `opacity ${dur}ms linear`;
+    stage.style.opacity = '0';
+    setTimeout(() => {
+      swapContent(p);
+      void stage.offsetWidth;   // reflow 강제(바로 opacity=1 이면 transition 안 먹음)
+      stage.style.opacity = '1';
+    }, dur);
+  } else {
+    stage.style.transition = '';
+    stage.style.opacity = '1';
+    swapContent(p);
   }
 }
 
