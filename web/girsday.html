@@ -1,0 +1,56 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden;font-family:"WenQuanYi Zen Hei","DejaVu Sans",sans-serif}
+video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+
+/* LIVE 표시 */
+.live{position:absolute;right:3%;top:4%;font:bold 4.5vh sans-serif;color:#fff;background:#c00;padding:.2em .8em;animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:.35}}
+
+/* 로어서드 이름 자막: 8초 주기로 들어왔다 나감 */
+.lt{position:absolute;left:4%;bottom:22%;display:flex;flex-direction:column;animation:lt 8s ease-in-out infinite}
+.lt .name{font-weight:bold;font-size:5.5vh;color:#fff;background:linear-gradient(90deg,#0038a8,#0060ff);padding:.15em .7em}
+.lt .role{font-size:3.2vh;color:#111;background:#ffd400;padding:.15em .9em;align-self:flex-start}
+@keyframes lt{0%,5%{transform:translateX(-120%);opacity:0}12%,75%{transform:none;opacity:1}85%,100%{transform:translateX(-120%);opacity:0}}
+
+/* 대사 자막: video.currentTime 에 맞춰 교체 */
+.sub{position:absolute;left:0;right:0;bottom:13%;text-align:center;font-weight:bold;font-size:4.8vh;color:#fff;
+     text-shadow:0 0 .15em #000,0 0 .15em #000,.06em .06em .1em #000}
+
+/* 하단 롤링 티커 */
+.tick{position:absolute;left:0;right:0;bottom:0;height:9vh;background:rgba(0,30,90,.9);border-top:.4vh solid #ffd400;overflow:hidden}
+.tick .tag{position:absolute;left:0;top:0;bottom:0;z-index:1;display:flex;align-items:center;padding:0 1em;font-weight:bold;font-size:4vh;color:#111;background:#ffd400}
+.tick span{position:absolute;top:50%;transform:translateY(-50%);white-space:nowrap;font-weight:bold;font-size:4.2vh;color:#fff;animation:roll 22s linear infinite}
+@keyframes roll{from{left:100%}to{left:-260%}}
+</style></head><body>
+<video id="v" src="girsday.mp4" autoplay loop muted playsinline></video>
+
+<div class="live">LIVE · MPP decode</div>
+
+<div class="lt"><div class="name">걸스데이 (Girl's Day)</div><div class="role">RK3588 MPP 하드웨어 디코딩 테스트</div></div>
+
+<div class="sub" id="sub"></div>
+
+<div class="tick"><div class="tag">NEWS</div>
+  <span>속보 • &lt;video&gt; 태그 → V4L2 → libv4l-rkmpp → MPP 하드웨어 디코딩 • 1080p H.264 • FriendlyElec Chromium 130 • CM3588 (RK3588) • HTML/CSS 자막 오버레이 테스트 •</span>
+</div>
+
+<script>
+// 재생 시간 기반 자막 [시작, 끝, 텍스트] (16초 주기 반복)
+const cues = [
+  [0, 4, '자막 테스트를 시작합니다'],
+  [4, 8, '영상은 MPP 하드웨어로 디코딩되고 있습니다'],
+  [8, 12, '자막과 그래픽은 HTML/CSS로 그립니다'],
+  [12, 16, '하단 티커와 이름 자막도 CSS 애니메이션입니다'],
+];
+const v = document.getElementById('v'), sub = document.getElementById('sub');
+let last = null;
+function update() {
+  const t = v.currentTime % 16;
+  const c = cues.find(([a, b]) => t >= a && t < b);
+  const txt = c ? c[2] : '';
+  if (txt !== last) { sub.textContent = txt; last = txt; }
+  requestAnimationFrame(update);
+}
+requestAnimationFrame(update);
+</script>
+</body></html>

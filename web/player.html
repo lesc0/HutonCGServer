@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="cg.css">
+<style>
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: #00b140; }
+  #stage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: hidden; }
+</style>
+<style id="pcss"></style>
+</head>
+<body>
+<div id="stage"></div>
+<script>
+let proj = null, idx = 0;
+
+function show(i) {
+  if (!proj) return;
+  idx = Math.max(0, Math.min(proj.pages.length - 1, i));
+  const p = proj.pages[idx];
+  document.getElementById('pcss').textContent = p.css || '';
+  const t = document.createElement('div');
+  t.innerHTML = p.html || '';               // <body> 태그는 파서가 제거
+  document.getElementById('stage').innerHTML = t.innerHTML;  // 재삽입 => 애니메이션 재생
+  // 페이지별 영상: 네이티브 MPP 디코딩 + RGA 합성 (HTML 은 투명 배경으로 위에 그려짐)
+  //   "video": 파일 경로(프로젝트 파일 기준 상대경로 가능), "videoRect": [x, y, w, h] (생략 시 전체화면)
+  if (window.cefQuery) {
+    if (p.video) {
+      if (p.videoRect) q('video:rect:' + p.videoRect.join(',')).catch(() => {});
+      q('video:play:' + p.video).catch(() => {});
+    } else {
+      q('video:stop').catch(() => {});
+    }
+  }
+}
+
+// 네이티브(UDP 명령)에서 호출. goto 는 1부터 시작
+window.cg = {
+  next: () => show(idx + 1),
+  prev: () => show(idx - 1),
+  goto: (n) => show(n - 1),
+};
+
+// 창이 1920x1080 보다 작으면(--view, HDMI 등) 비율 유지 축소. OSR(1920x1080)에서는 영향 없음
+function fit() {
+  const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+  document.body.style.transformOrigin = '0 0';
+  document.body.style.transform = s < 1 ? `scale(${s})` : '';
+}
+addEventListener('resize', fit);
+fit();
+
+function q(request) {
+  return new Promise((ok, ng) =>
+    window.cefQuery({ request, onSuccess: ok, onFailure: (c, m) => ng(m) }));
+}
+
+(async () => {
+  proj = JSON.parse(await q('load'));
+  document.documentElement.style.background = document.body.style.background = proj.bg || '#00b140';  // 'transparent' 면 영상이 비침
+  show(0);
+  // 로딩 완료 대기: 폰트 -> 이미지 -> 렌더 2프레임
+  await document.fonts.ready;
+  await Promise.all([...document.images].map(im => im.decode().catch(() => {})));
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  await q('ready');   // 이 신호 이후부터 인코딩 시작
+})();
+</script>
+</body>
+</html>
