@@ -299,3 +299,11 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
   전환 중에도 enc 60fps.
 - `cgctl.sh` 추가: SSH 에서 `./cgctl.sh next|prev|goto N|quit|status` (UDP 127.0.0.1:5555).
 - 기존 TODO(README "2장(33ms)" → 3장(50ms)) 반영 완료.
+
+### FFmpeg 라이브러리 출처
+
+- `CMakeLists.txt`가 `pkg_check_modules(FFMPEG ... libavformat libavcodec libavutil)`로 링크하는 FFmpeg는
+  별도로 받아오거나 소스빌드한 게 아니라 **apt로 설치된 시스템 패키지**(`libavformat-dev` 등).
+- 버전: `7:4.3.4-1rockchip-r6-b230628` — 이름 그대로 **Rockchip이 커스터마이징한 빌드**이며,
+  데비안 보안 저장소의 표준 `4.3.9`/`4.3.7`보다 우선순위(pin priority 100, 로컬/벤더 저장소)가 높게 잡혀 있어
+  `apt install`만으로 이 버전이 선택됨. `ffmpeg`(CLI)도 같은 소스의 동일 버전.
