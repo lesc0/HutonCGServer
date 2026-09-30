@@ -1,0 +1,98 @@
+{
+  "format": "cg-editor",
+  "version": 2,
+  "name": "가로스크롤 예제",
+  "width": 1920,
+  "height": 1080,
+  "runSettings": {
+    "allPages": true,
+    "mode": "auto",
+    "startPage": 1,
+    "endPage": 1,
+    "loops": 100,
+    "loopDelay": 0,
+    "editSync": true
+  },
+  "pages": [
+    {
+      "id": "crawl_page",
+      "name": "가로 스크롤",
+      "bg": "transparent",
+      "duration": 26,
+      "mode": "Still",
+      "effect": "none",
+      "outEffect": "none",
+      "inDuration": 1,
+      "outDuration": 1,
+      "items": [
+        {
+          "id": "bar",
+          "type": "rect",
+          "name": "자막 바탕",
+          "x": 0,
+          "y": 880,
+          "w": 1920,
+          "h": 110,
+          "fill": "#0a2a52",
+          "opacity": 0.92,
+          "start": 0,
+          "duration": 26,
+          "family": "맑은 고딕",
+          "bold": true
+        },
+        {
+          "id": "crawl_text",
+          "type": "text",
+          "name": "가로 스크롤 텍스트",
+          "text": "Huton CG Editor 가로 스크롤 예제입니다  ●  텍스트 개체에 Effects 탭의 Crawl 효과를 적용하면 오른쪽에서 왼쪽으로 흘러갑니다  ●  속도는 개체의 지속 시간으로 조절합니다  ●  긴 문장도 글자 길이에 맞춰 끝까지 흘러갑니다",
+          "x": 1920,
+          "y": 899,
+          "w": 6228,
+          "h": 72,
+          "size": 60,
+          "fill": "#ffffff",
+          "stroke": "#000000",
+          "strokeWidth": 2,
+          "effect": "crawl",
+          "direction": "left",
+          "speed": 1,
+          "start": 0,
+          "duration": 26,
+          "family": "맑은 고딕",
+          "bold": true
+        },
+        {
+          "id": "label_bg",
+          "type": "rect",
+          "name": "속보 라벨",
+          "x": 0,
+          "y": 880,
+          "w": 230,
+          "h": 110,
+          "fill": "#d6232a",
+          "start": 0,
+          "duration": 26,
+          "family": "맑은 고딕",
+          "bold": true
+        },
+        {
+          "id": "label_text",
+          "type": "text",
+          "name": "속보",
+          "text": "속보",
+          "x": 0,
+          "y": 893,
+          "w": 230,
+          "h": 84,
+          "size": 64,
+          "fill": "#ffffff",
+          "align": "center",
+          "start": 0,
+          "duration": 26,
+          "family": "맑은 고딕",
+          "bold": true
+        }
+      ]
+    }
+  ]
+}

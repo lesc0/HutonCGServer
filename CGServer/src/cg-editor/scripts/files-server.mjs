@@ -165,7 +165,7 @@ const server = http.createServer(async (req, res) => {
         if (req.method === 'PUT') {
           let project;
           try { project = JSON.parse((await readBody(req, MAX_PROJECT)).toString('utf8')); } catch (e) {
-            return fail(res, e.code === 413 ? 413 : 400, e.code === 413 ? '프로젝트가 50MB 를 넘습니다.' : 'JSON 을 읽지 못했습니다.');
+            return fail(res, e.code === 413 ? 413 : 400, e.code === 413 ? '프로젝트가 50MB 를 넘습니다.' : '프로젝트 파일을 읽지 못했습니다.');
           }
           if (!project || project.format !== 'cg-editor' || !Array.isArray(project.pages)) return fail(res, 400, 'CG 편집기 프로젝트가 아닙니다.');
           const extracted = await extractMedia(project);

@@ -1,5 +1,5 @@
 // 파일 서버(scripts/files-server.mjs) 클라이언트.
-//   이미지·영상·음성은 bin/media 에서만 가져오고, 프로젝트 JSON 은 bin/project 에 저장한다.
+//   이미지·영상·음성은 bin/media 에서만 가져오고, 프로젝트 파일은 bin/project 에 저장한다.
 //   프로젝트 안의 미디어 src 는 "../media/<파일>" (project 폴더 기준 상대경로)로 기록한다.
 //   실행엔진(cg-streamer)은 이 경로를 project 파일 위치 기준으로 그대로 읽는다.
 import type {Project} from './model';
