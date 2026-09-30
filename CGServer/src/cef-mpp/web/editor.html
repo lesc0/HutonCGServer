@@ -1,0 +1,223 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>CG 저작</title>
+<link rel="stylesheet" href="grapes.min.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #222; color: #eee; font: 14px sans-serif; }
+  #app { display: flex; flex-direction: column; height: 100%; }
+  #bar { display: flex; gap: 6px; align-items: center; padding: 6px 8px; background: #111; flex-wrap: wrap; }
+  #bar button, #bar select, #bar input { font-size: 14px; padding: 5px 8px; }
+  #bar input[type=number] { width: 56px; }
+  #bar input[type=color] { width: 40px; padding: 0; height: 30px; }
+  #bar .sep { width: 1px; height: 24px; background: #444; margin: 0 4px; }
+  #msg { margin-left: auto; color: #8f8; }
+  #main { flex: 1; display: flex; min-height: 0; }
+  #left  { width: 170px; overflow: auto; background: #333; padding: 6px; box-sizing: border-box; }
+  #right { width: 270px; overflow: auto; background: #333; }
+  #gjs { flex: 1; border: none; }
+  .gjs-block { width: 100%; min-height: 60px; margin: 0 0 8px 0; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bar">
+    <select id="pageSel"></select>
+    <button id="addPage">+ 페이지</button>
+    <button id="delPage">페이지 삭제</button>
+    <span class="sep"></span>
+    배경 <input type="color" id="bg" value="#00b140">
+    <span class="sep"></span>
+    애니메이션
+    <select id="anim">
+      <option value="">없음</option>
+      <option value="a-fade">페이드</option>
+      <option value="a-slide-left">좌→우 슬라이드</option>
+      <option value="a-slide-up">아래→위 슬라이드</option>
+      <option value="a-scroll">롤링</option>
+    </select>
+    지연 <input type="number" id="delay" min="0" step="0.1" value="0">s
+    시간 <input type="number" id="dur" min="0.1" step="0.1" value="0.7">s
+    <span class="sep"></span>
+    배율
+    <select id="zoom">
+      <option value="fit">맞춤</option><option>25</option><option>35</option><option>50</option><option>75</option><option>100</option>
+    </select>
+    <span class="sep"></span>
+    <button id="save">저장</button>
+    <button id="run">▶ 실행</button>
+    <button id="stop">■ 정지</button>
+    <button id="prev">◀</button>
+    <button id="next">▶</button>
+    <span id="msg"></span>
+  </div>
+  <div id="main">
+    <div id="left"><div id="blocks"></div></div>
+    <div id="gjs"></div>
+    <div id="right"><div id="selectors"></div><div id="styles"></div></div>
+  </div>
+</div>
+
+<script src="grapes.min.js"></script>
+<script>
+const W = 1920, H = 1080;
+const $ = (id) => document.getElementById(id);
+
+// ---------- 네이티브 브릿지 ----------
+function q(request) {
+  return new Promise((ok, ng) => {
+    if (typeof window.cefQuery !== 'function') return ng('native bridge 없음');
+    window.cefQuery({ request, onSuccess: ok, onFailure: (c, m) => ng(m) });
+  });
+}
+function msg(t, err) {
+  const m = $('msg'); m.style.color = err ? '#f88' : '#8f8'; m.textContent = t;
+  clearTimeout(msg.t); msg.t = setTimeout(() => (m.textContent = ''), 3000);
+}
+
+// ---------- GrapesJS ----------
+const FONTS = [
+  { id: '"Noto Sans CJK KR","Noto Sans KR",sans-serif', label: 'Noto Sans KR' },
+  { id: 'sans-serif', label: 'Sans' },
+  { id: 'serif', label: 'Serif' },
+  { id: 'monospace', label: 'Mono' },
+];
+
+const editor = grapesjs.init({
+  container: '#gjs', height: '100%', width: 'auto', fromElement: false,
+  storageManager: false, panels: { defaults: [] },
+  dragMode: 'absolute',                       // 자유 배치
+  assetManager: { embedAsBase64: true, upload: false },
+  canvas: { styles: [new URL('cg.css', location.href).href] },
+  deviceManager: { devices: [{ id: 'fhd', name: 'FHD', width: W + 'px' }] },
+  blockManager: { appendTo: '#blocks' },
+  selectorManager: { appendTo: '#selectors', componentFirst: true }, // 클래스가 아닌 요소 단위 스타일
+  styleManager: {
+    appendTo: '#styles',
+    sectors: [
+      { name: '위치/크기', open: true, buildProps: ['left', 'top', 'width', 'height'] },
+      { name: '글꼴', open: true,
+        buildProps: ['font-family', 'font-size', 'font-weight', 'color', 'text-align', 'line-height', 'letter-spacing', 'text-shadow'],
+        properties: [{ extend: 'font-family', options: FONTS }] },
+      { name: '배경/테두리', open: false,
+        buildProps: ['background-color', 'border', 'border-radius', 'opacity', 'box-shadow'] },
+    ],
+  },
+});
+
+// ---------- 블록 ----------
+const B = editor.Blocks;
+B.add('text', { label: '텍스트',
+  content: '<div style="position:absolute;left:200px;top:400px;color:#ffffff;font-size:72px;font-weight:700;">텍스트 입력</div>' });
+B.add('box', { label: '박스',
+  content: '<div style="position:absolute;left:300px;top:300px;width:400px;height:200px;background-color:#0057b8;"></div>' });
+B.add('image', { label: '이미지', select: true, activate: true,
+  content: { type: 'image', style: { position: 'absolute', left: '100px', top: '100px', width: '400px' } } });
+B.add('lower3', { label: '하단 자막',
+  content:
+    '<div class="a-slide-left" style="position:absolute;left:120px;top:860px;width:960px;height:140px;background-color:rgba(0,0,0,0.75);border-left:12px solid #f5b800;">' +
+    '<div style="position:absolute;left:32px;top:12px;color:#ffffff;font-size:56px;font-weight:700;">제목 입력</div>' +
+    '<div style="position:absolute;left:32px;top:82px;color:#dddddd;font-size:36px;">부제목 입력</div></div>' });
+B.add('ticker', { label: '롤링 자막',
+  content:
+    '<div style="position:absolute;left:0px;top:980px;width:1920px;height:100px;background-color:#000000;overflow:hidden;">' +
+    '<div class="a-scroll" style="position:absolute;left:0px;top:16px;color:#ffffff;font-size:56px;">롤링 자막 문구를 입력하세요</div></div>' });
+
+// ---------- 페이지 관리 (페이지 = 독립 프로젝트 스냅샷) ----------
+let pages = [{}];       // {data, html, css}
+let cur = 0;
+let bg = '#00b140';
+
+function snapshot() {
+  return { data: editor.getProjectData(), html: editor.getHtml(), css: editor.getCss() };
+}
+function storeCur() { pages[cur] = snapshot(); }
+
+function applyCanvas() {
+  const doc = editor.Canvas.getDocument();
+  if (!doc) return;
+  let s = doc.getElementById('cgbase');
+  if (!s) { s = doc.createElement('style'); s.id = 'cgbase'; doc.head.appendChild(s); }
+  s.textContent = `html{background:#555} body{position:relative!important;width:${W}px;height:${H}px;overflow:hidden;margin:0;background:${bg}!important}`;
+}
+function refreshUI() {
+  $('pageSel').innerHTML = pages.map((_, i) => `<option value="${i}">페이지 ${i + 1} / ${pages.length}</option>`).join('');
+  $('pageSel').value = cur;
+  $('bg').value = bg;
+  syncAnim();
+}
+function loadPage(i) {
+  const p = pages[i];
+  if (p && p.data) editor.loadProjectData(p.data);
+  else { editor.DomComponents.clear(); editor.Css.clear(); }
+  editor.UndoManager.clear();
+  applyCanvas(); refreshUI();
+}
+function gotoPage(i) { if (i === cur) return; storeCur(); cur = i; loadPage(i); }
+
+$('pageSel').onchange = (e) => gotoPage(+e.target.value);
+$('addPage').onclick = () => { storeCur(); pages.push({}); cur = pages.length - 1; loadPage(cur); };
+$('delPage').onclick = () => {
+  if (pages.length <= 1) return msg('마지막 페이지는 삭제할 수 없습니다', true);
+  pages.splice(cur, 1); cur = Math.min(cur, pages.length - 1); loadPage(cur);
+};
+$('bg').oninput = (e) => { bg = e.target.value; applyCanvas(); };
+
+// ---------- 애니메이션 ----------
+const ANIMS = ['a-fade', 'a-slide-left', 'a-slide-up', 'a-scroll'];
+function syncAnim() {
+  const s = editor.getSelected();
+  if (!s) { $('anim').value = ''; return; }
+  const cls = s.getClasses();
+  $('anim').value = ANIMS.find((c) => cls.includes(c)) || '';
+  const st = s.getStyle();
+  $('delay').value = parseFloat(st['animation-delay']) || 0;
+  $('dur').value = parseFloat(st['animation-duration']) || 0.7;
+}
+editor.on('component:selected', syncAnim);
+$('anim').onchange = (e) => {
+  const s = editor.getSelected(); if (!s) return;
+  ANIMS.forEach((c) => s.removeClass(c));
+  if (e.target.value) s.addClass(e.target.value);
+};
+$('delay').onchange = (e) => { const s = editor.getSelected(); if (s) s.addStyle({ 'animation-delay': e.target.value + 's' }); };
+$('dur').onchange = (e) => { const s = editor.getSelected(); if (s) s.addStyle({ 'animation-duration': e.target.value + 's' }); };
+
+// ---------- 배율 ----------
+function applyZoom() {
+  const v = $('zoom').value;
+  const c = document.querySelector('.gjs-cv-canvas');
+  const z = v === 'fit' ? Math.max(10, Math.floor(((c ? c.clientWidth : 1200) - 24) / W * 100)) : +v;
+  editor.Canvas.setZoom(z);
+}
+$('zoom').onchange = applyZoom;
+window.addEventListener('resize', () => $('zoom').value === 'fit' && applyZoom());
+
+// ---------- 저장 / 실행 / 제어 ----------
+async function save() {
+  storeCur();
+  await q('save:' + JSON.stringify({ version: 1, bg, pages }));
+  msg('저장됨');
+}
+$('save').onclick = () => save().catch((e) => msg('저장 실패: ' + e, true));
+$('run').onclick = async () => {
+  try { await save(); await q('run'); msg('실행 시작 (로딩 후 인코딩 시작)'); }
+  catch (e) { msg('실행 실패: ' + e, true); }
+};
+$('stop').onclick = () => q('cmd:quit').catch((e) => msg(String(e), true));
+$('prev').onclick = () => q('cmd:prev').catch((e) => msg(String(e), true));
+$('next').onclick = () => q('cmd:next').catch((e) => msg(String(e), true));
+
+// ---------- 시작 ----------
+editor.on('load', async () => {
+  editor.setDevice('fhd');
+  try {
+    const p = JSON.parse(await q('load'));
+    if (p.pages && p.pages.length) { pages = p.pages; bg = p.bg || bg; }
+  } catch (e) { /* 새 프로젝트 */ }
+  cur = 0; loadPage(0); applyZoom();
+});
+</script>
+</body>
+</html>

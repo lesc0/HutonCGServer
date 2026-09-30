@@ -1,0 +1,10 @@
+/* 저작 캔버스와 플레이어가 공유하는 애니메이션 클래스 */
+.a-fade        { animation: cgFade 0.6s ease both; }
+.a-slide-left  { animation: cgSlideL 0.7s cubic-bezier(.2,.8,.2,1) both; }
+.a-slide-up    { animation: cgSlideU 0.7s cubic-bezier(.2,.8,.2,1) both; }
+.a-scroll      { white-space: nowrap; animation: cgScroll 14s linear infinite; }
+
+@keyframes cgFade   { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cgSlideL { from { transform: translateX(-1400px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes cgSlideU { from { transform: translateY(300px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes cgScroll { from { transform: translateX(1920px); } to { transform: translateX(-100%); } }

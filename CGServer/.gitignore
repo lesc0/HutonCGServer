@@ -6,3 +6,4 @@ node_modules/
 src/editor/client/dist/
 src/editor/server/templates.json
 src/editor/server/cg_projects/
+doc/cef/*.tar.gz
