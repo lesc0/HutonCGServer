@@ -114,3 +114,10 @@ input:disabled,textarea:disabled{background:#0a0d15;color:#55617c}
 .effect-preview.fade{background:linear-gradient(90deg,#0f1a33,#2a4a80)}
 .effect-preview.organic{background:repeating-conic-gradient(#1a2a4e 0 8%,#2b4270 8% 16%)}
 .effect-preview.tile{background:repeating-conic-gradient(#1a2a4e 0 25%,#2b4270 25% 50%);background-size:10px 10px}
+
+/* In/Out 등 토글 버튼: 선택된 쪽이 확실히 구분되도록 (위의 공통 버튼 규칙이 .active 색을 덮어쓰던 문제) */
+.checks button.active,.facebuttons button.active{background:var(--accent);border-color:var(--accent2);color:#fff}
+.checks button:not(.active){background:var(--btn);color:var(--muted)}
+
+/* Run Setting 안내 문장: 버튼 줄과 분리해 한 줄 전체를 쓰고 두 줄 간격을 둠 */
+.runsettings p{flex:0 0 100%;margin-top:22px}
