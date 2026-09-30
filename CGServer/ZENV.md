@@ -1,4 +1,4 @@
-# cef_mpp — CEF 문자발생기(CG) → RGA → MPP H.264 → MPEG-TS/UDP (RK3588)
+# cg-streamer — CEF 문자발생기(CG) → RGA → MPP H.264 → MPEG-TS/UDP (RK3588)
 
 HTML/CSS로 그린 방송 그래픽(자막·티커·이미지)을 CEF 오프스크린 렌더링으로 받아, 필요하면 mp4 영상과
 합성한 뒤 RK3588 하드웨어(RGA 색변환·합성, MPP H.264 인코딩)로 1080p60 MPEG-TS/UDP를 송출한다.
@@ -7,7 +7,7 @@ HTML/CSS로 그린 방송 그래픽(자막·티커·이미지)을 CEF 오프스�
 ```
 CGServer/
 ├─ src/
-│  ├─ cef_mpp/       C++ 구현체
+│  ├─ cg-streamer/       C++ 구현체
 │  │  ├─ main.cpp         모드(--edit/--run), CEF 클라이언트, cefQuery 브릿지, UDP 제어, 인코딩 루프,
 │  │  │                   UI 지터 버퍼, 로컬 미리보기 창(--preview, X11)
 │  │  ├─ mpp_encoder.*    RGA(BGRA→NV12, 영상+UI 합성) + MPP H.264 인코더(1080p60 CBR 8Mbps) + 미리보기 BGRX 추출
@@ -58,13 +58,11 @@ sudo apt install build-essential ninja-build pkg-config git \
 
 ## 빌드
 ```bash
-cd /root/work/CGServer
+cd /root/work/CGServer/src/cg-streamer   # CMakeLists.txt / CMakePresets.json 위치
 cmake --preset rk3588            # 최초 1회 (CEF_ROOT 환경변수 사용)
-cmake --build --preset rk3588    # → build/rk3588/Release/cef_mpp (+ libcef.so, 리소스, web/ 복사)
+cmake --build --preset rk3588    # → bin/cg-streamer (+ libcef.so, 리소스). 웹은 bin/web/ 을 그대로 사용
 ```
-- `web/` 파일만 고쳤을 때는 재링크가 없으면 복사되지 않는다:
-  `cp web/*.html build/rk3588/Release/web/`
-- 재링크 시 `web/` 전체(girsday.mp4 163MB 포함)가 `Release/web/`으로 복사된다.
+- 웹 파일(bin/web/)은 복사 없이 바로 반영된다(실행 파일 옆 web/).
 - 실험 경로(`--accel`)는 `rk3588-accel` 프리셋 (아래 "실험" 참고).
 
 ## 실행
@@ -73,22 +71,22 @@ cmake --build --preset rk3588    # → build/rk3588/Release/cef_mpp (+ libcef.so
 cd /root/work/CGServer/build/rk3588/Release
 
 # 송출 (기본 udp://127.0.0.1:1234)
-./cef_mpp --run --project=/root/work/CGServer/build/image_project.json
-./cef_mpp --run --project=... --udp=10.10.10.11:1234        # 유니캐스트
-./cef_mpp --run --project=... --udp=239.1.1.1:1234          # 멀티캐스트
-./cef_mpp --run --project=... --out=capture.ts --seconds=30 # 파일(TS) 30초
+./cg-streamer --run --project=/root/work/CGServer/build/image_project.json
+./cg-streamer --run --project=... --udp=10.10.10.11:1234        # 유니캐스트
+./cg-streamer --run --project=... --udp=239.1.1.1:1234          # 멀티캐스트
+./cg-streamer --run --project=... --out=capture.ts --seconds=30 # 파일(TS) 30초
 
 # 백그라운드 송출 (SSH 끊어도 유지, 로그 즉시 기록)
-nohup stdbuf -oL ./cef_mpp --run --project=... --udp=10.10.10.11:1234 > ../run_udp.log 2>&1 &
+nohup stdbuf -oL ./cg-streamer --run --project=... --udp=10.10.10.11:1234 > ../run_udp.log 2>&1 &
 
 # 저작 (GUI 세션 필요: DISPLAY=:0)
-DISPLAY=:0 XAUTHORITY=/home/pi/.Xauthority ./cef_mpp --edit --project=project.json
+DISPLAY=:0 XAUTHORITY=/home/pi/.Xauthority ./cg-streamer --edit --project=project.json
 
 # HDMI 로 실제 송출 화면 확인 (UI+영상 합성 그대로, 인코딩/UDP 는 정상 유지)
-DISPLAY=:0 XAUTHORITY=/home/pi/.Xauthority ./cef_mpp --run --preview --project=... --udp=10.10.10.11:1234
+DISPLAY=:0 XAUTHORITY=/home/pi/.Xauthority ./cg-streamer --run --preview --project=... --udp=10.10.10.11:1234
 
 # UI 만 확인 (영상 없음, 인코딩 없음, --cef:use-angle=gles-egl 은 이 보드에서 EGL 초기화 실패 -> swiftshader 로 대체)
-DISPLAY=:0 XAUTHORITY=/home/pi/.Xauthority ./cef_mpp --run --view \
+DISPLAY=:0 XAUTHORITY=/home/pi/.Xauthority ./cg-streamer --run --view \
   --cef:use-gl=angle --cef:use-angle=swiftshader-webgl --project=...
 ```
 
@@ -218,7 +216,7 @@ CM3588 의 HDMI IN(`/dev/video20`, rk_hdmirx)을 영상 자리에 합성한다.
 ```bash
 cmake --preset rk3588-accel && cmake --build --preset rk3588-accel
 cd build/rk3588-accel/Release
-./cef_mpp --run --accel --cef:use-angle=gles-egl --cef:ozone-platform=headless --project=...
+./cg-streamer --run --accel --cef:use-angle=gles-egl --cef:ozone-platform=headless --project=...
 ```
 - 흐름: CEF(GPU 합성) → OnAcceleratedPaint(dmabuf) → RGA(fd) → NV12 → MPP → TS/UDP
 - 실측: GPU 프로세스는 Mali로 동작하지만 **OnAcceleratedPaint 콜백 0회** (CEF Linux 공유 텍스처 미검증 경로,

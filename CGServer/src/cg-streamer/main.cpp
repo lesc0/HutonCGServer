@@ -1,8 +1,10 @@
 // 문자발생기(CG): 저작(--edit) / 실행(--run)
-//   ./cef_mpp --edit  [--project=project.json]
-//   ./cef_mpp --run   [--project=project.json] [--udp=host:port | --out=URL또는파일.ts] [--seconds=N]
+//   ./cg-streamer --edit  [--project=project.json]
+//   ./cg-streamer --run   [--project=project.json] [--udp=host:port | --out=URL또는파일.ts] [--seconds=N]
 //   실험: cmake -DENABLE_ACCEL_PAINT=ON 빌드 후 --accel (OnAcceleratedPaint dmabuf, GPU 경로)
 //         --gpu : OnPaint 경로 그대로, GPU 합성만 켬 (disable-gpu 생략, 예: --cef:use-angle=gles-egl)
+//   --http=PORT : HTTP 제어 포트 (기본 5555)  --bind=ADDR (기본 127.0.0.1)  --token=문자열 (Authorization: Bearer)
+//   --autoplay : 로딩 후 Run Setting 시작 페이지부터 자동 재생 (기본은 출력을 비워 두고 명령 대기)
 //   --view : 전체화면 창으로 재생 (DISPLAY 필요, 인코딩 없음)
 //   --preview : 인코딩(UI+영상 합성)은 그대로 하면서, 그 결과를 별도 X11 창(DISPLAY 필요)에도 표시
 //   --no-encode : 렌더링만 (인코딩/전송 없음, CEF 자체 부하 측정용)
@@ -16,6 +18,7 @@
 //   player.html 이 cefQuery 로 요청: video:play:<경로> | video:stop | video:rect:x,y,w,h
 //   "video": "hdmirx" (또는 "/dev/videoN") 이면 HDMI 입력(rk_hdmirx)을 라이브 소스로 합성
 #include <arpa/inet.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <spawn.h>
@@ -28,6 +31,7 @@
 #include <deque>
 #include <chrono>
 #include <cstdio>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -82,6 +86,14 @@ static bool g_sync = true;                       // UI 지터 버퍼 사용 (--n
 static std::string g_project = "project.json";
 static std::string g_out = "udp://127.0.0.1:1234?pkt_size=1316";
 static std::string g_exe, g_webdir;
+
+// HTTP 제어 (--http=PORT --bind=ADDR --token=TOKEN). 기본은 loopback 전용, 토큰 없음.
+static int g_http_port = kCtlPort;               // TCP 와 UDP 포트는 별개라 같은 번호를 써도 충돌하지 않는다
+static std::string g_http_bind = "127.0.0.1";
+static std::string g_http_token;
+static bool g_autoplay = false;                  // --autoplay: 로딩 후 Run Setting 시작 페이지부터 자동 재생
+static std::mutex g_state_mu;                    // player 가 cefQuery('state:...') 로 올려 주는 상태 (GET /status)
+static std::string g_state = "{\"ready\":false}";
 static std::atomic<bool> g_ready{false};   // player.html 로딩 완료 신호
 static std::atomic<bool> g_quit{false};
 static std::atomic<uint64_t> g_paints{0};
@@ -244,6 +256,16 @@ class Client : public CefClient,
       std::ofstream f(g_project, std::ios::binary | std::ios::trunc);
       if (!f) { cb->Failure(1, "cannot write " + g_project); return true; }
       f << r.substr(5);
+      cb->Success("ok");
+      return true;
+    }
+    if (r == "base") {            // 프로젝트 폴더 URL: player 가 이미지 상대경로를 이 기준으로 해석
+      cb->Success("file://" + std::filesystem::path(g_project).parent_path().string() + "/");
+      return true;
+    }
+    if (r.rfind("state:", 0) == 0) {   // player 상태 보고 (JSON)
+      std::lock_guard<std::mutex> lk(g_state_mu);
+      g_state = r.substr(6);
       cb->Success("ok");
       return true;
     }
@@ -647,6 +669,163 @@ static void UdpLoop(CefRefPtr<Client> client) {
   close(fd);
 }
 
+// ---------- HTTP 제어 ----------
+// POST /play|run|stop|clear|pause|cut|skip|next|prev     POST /play/N  /goto/N (1부터)
+// POST /stamp/{1|2}/{play|stop|pause}                    POST /global/{play|stop}
+// PUT  /text/{linkName}  본문 {"text":"..."} (UTF-8)       GET /status      POST /quit
+// 명령은 CEF UI 스레드에서 cg.cmd(이름, 인자, 본문) 으로 실행되고, 응답은 접수 결과만 돌려준다.
+// JS 문자열은 JsQuote 로 이스케이프해서 넘기므로 요청 내용이 코드로 해석되지 않는다.
+static std::string JsQuote(const std::string& s) {
+  std::string o = "\"";
+  for (unsigned char c : s) {
+    if (c == '"' || c == '\\') { o += '\\'; o += (char)c; }
+    else if (c == '\n') o += "\\n";
+    else if (c == '\r') o += "\\r";
+    else if (c == '\t') o += "\\t";
+    else if (c < 0x20) { char b[8]; snprintf(b, sizeof b, "\\u%04x", c); o += b; }
+    else o += (char)c;
+  }
+  return o + "\"";
+}
+
+static std::vector<std::string> SplitPath(const std::string& p) {
+  std::vector<std::string> v;
+  std::stringstream ss(p);
+  std::string seg;
+  while (std::getline(ss, seg, '/'))
+    if (!seg.empty()) v.push_back(seg);
+  return v;
+}
+
+static bool AllDigits(const std::string& s) {
+  return !s.empty() && s.size() <= 6 && std::all_of(s.begin(), s.end(), [](unsigned char c) { return isdigit(c); });
+}
+
+static bool IsLinkName(const std::string& s) {
+  return !s.empty() && s.size() <= 100 &&
+         std::all_of(s.begin(), s.end(), [](unsigned char c) { return isalnum(c) || c == '_' || c == '-'; });
+}
+
+static void HttpReply(int fd, int code, const std::string& body) {
+  const char* reason = code == 200 ? "OK" : code == 400 ? "Bad Request" : code == 401 ? "Unauthorized" :
+                       code == 404 ? "Not Found" : code == 405 ? "Method Not Allowed" : "Payload Too Large";
+  std::string r = "HTTP/1.1 " + std::to_string(code) + " " + reason + "\r\nContent-Type: application/json; charset=utf-8\r\n" +
+                  "Content-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+  send(fd, r.data(), r.size(), MSG_NOSIGNAL);
+}
+
+// 요청 1개 처리. 잘못된 요청은 4xx 로 응답.
+static void HttpHandle(int fd, CefRefPtr<Client> client) {
+  constexpr size_t kMaxHead = 16 * 1024, kMaxBody = 64 * 1024;
+  std::string req;
+  char buf[4096];
+  size_t head_end = std::string::npos, need = 0;
+  while (head_end == std::string::npos || req.size() < need) {
+    ssize_t n = recv(fd, buf, sizeof buf, 0);
+    if (n <= 0) return;                               // 타임아웃/끊김
+    req.append(buf, n);
+    if (head_end == std::string::npos) {
+      head_end = req.find("\r\n\r\n");
+      if (head_end == std::string::npos) { if (req.size() > kMaxHead) return HttpReply(fd, 400, "{\"ok\":false,\"error\":\"header too large\"}"); continue; }
+      head_end += 4;
+      need = head_end;
+      std::string lower = req.substr(0, head_end);
+      std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return tolower(c); });
+      size_t p = lower.find("\r\ncontent-length:");
+      if (p != std::string::npos) {
+        size_t len = strtoull(lower.c_str() + p + 17, nullptr, 10);
+        if (len > kMaxBody) return HttpReply(fd, 413, "{\"ok\":false,\"error\":\"body too large\"}");
+        need += len;
+      }
+    }
+  }
+
+  const size_t eol = req.find("\r\n");
+  std::stringstream rl(req.substr(0, eol));
+  std::string method, target, ver;
+  rl >> method >> target >> ver;
+  const std::string head = req.substr(0, head_end), body = req.substr(head_end, need - head_end);
+  std::string path = target.substr(0, target.find('?'));
+
+  if (!g_http_token.empty()) {
+    std::string lower = head;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return tolower(c); });
+    size_t p = lower.find("\r\nauthorization:");
+    std::string got;
+    if (p != std::string::npos) {
+      size_t e = head.find("\r\n", p + 2);
+      got = head.substr(p + 16, e - (p + 16));
+      while (!got.empty() && got[0] == ' ') got.erase(0, 1);
+    }
+    if (got != "Bearer " + g_http_token) return HttpReply(fd, 401, "{\"ok\":false,\"error\":\"unauthorized\"}");
+  }
+
+  const auto seg = SplitPath(path);
+  if (seg.empty()) return HttpReply(fd, 404, "{\"ok\":false,\"error\":\"not found\"}");
+
+  if (seg[0] == "status" && seg.size() == 1) {
+    if (method != "GET") return HttpReply(fd, 405, "{\"ok\":false,\"error\":\"use GET\"}");
+    std::lock_guard<std::mutex> lk(g_state_mu);
+    return HttpReply(fd, 200, g_state);
+  }
+  if (method != (seg[0] == "text" ? "PUT" : "POST")) return HttpReply(fd, 405, "{\"ok\":false,\"error\":\"method not allowed\"}");
+
+  std::string name = seg[0], arg, payload;
+  bool ok = false;
+  if (seg.size() == 1 && name == "quit") {
+    g_quit = true;
+    return HttpReply(fd, 200, "{\"ok\":true}");
+  } else if (seg.size() == 1 && (name == "play" || name == "run" || name == "stop" || name == "clear" || name == "pause" ||
+                                 name == "cut" || name == "skip" || name == "next" || name == "prev")) {
+    ok = true;
+  } else if (seg.size() == 2 && (name == "play" || name == "goto") && AllDigits(seg[1])) {
+    arg = seg[1]; ok = true;
+  } else if (seg.size() == 3 && name == "stamp" && (seg[1] == "1" || seg[1] == "2") &&
+             (seg[2] == "play" || seg[2] == "stop" || seg[2] == "pause")) {
+    arg = seg[1] + "/" + seg[2]; ok = true;
+  } else if (seg.size() == 2 && name == "global" && (seg[1] == "play" || seg[1] == "stop")) {
+    arg = seg[1]; ok = true;
+  } else if (seg.size() == 2 && name == "text" && IsLinkName(seg[1])) {
+    arg = seg[1]; payload = body; ok = true;
+  }
+  if (!ok) return HttpReply(fd, 404, "{\"ok\":false,\"error\":\"unknown command\"}");
+
+  const std::string js = "cg.cmd(" + JsQuote(name) + "," + JsQuote(arg) + "," + JsQuote(payload) + ")";
+  CefPostTask(TID_UI, base::BindOnce(&Client::Exec, client, js));
+  HttpReply(fd, 200, "{\"ok\":true}");
+}
+
+static void HttpLoop(CefRefPtr<Client> client) {
+  pthread_setname_np(pthread_self(), "cg-http");
+  int ls = socket(AF_INET, SOCK_STREAM, 0);
+  int one = 1;
+  setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+  sockaddr_in a{};
+  a.sin_family = AF_INET;
+  a.sin_port = htons(g_http_port);
+  if (inet_pton(AF_INET, g_http_bind.c_str(), &a.sin_addr) != 1) {
+    fprintf(stderr, "[http] 잘못된 --bind 주소: %s\n", g_http_bind.c_str());
+    close(ls);
+    return;
+  }
+  if (bind(ls, (sockaddr*)&a, sizeof a) != 0 || listen(ls, 16) != 0) {
+    perror("[http] bind/listen");
+    close(ls);
+    return;
+  }
+  while (!g_quit) {
+    pollfd pf{ls, POLLIN, 0};
+    if (poll(&pf, 1, 200) <= 0) continue;
+    int fd = accept(ls, nullptr, nullptr);
+    if (fd < 0) continue;
+    timeval tv{2, 0};                                  // 느린 클라이언트가 서버를 붙잡지 못하게
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    HttpHandle(fd, client);
+    close(fd);
+  }
+  close(ls);
+}
+
 static void OnSignal(int) { g_quit = true; }
 
 int main(int argc, char* argv[]) {
@@ -666,6 +845,10 @@ int main(int argc, char* argv[]) {
     else if (a.rfind("--out=", 0) == 0) g_out = a.substr(6);
     else if (a.rfind("--udp=", 0) == 0) g_out = "udp://" + a.substr(6) + "?pkt_size=1316";
     else if (a.rfind("--seconds=", 0) == 0) seconds = atoi(a.c_str() + 10);
+    else if (a.rfind("--http=", 0) == 0) g_http_port = std::max(1, std::min(65535, atoi(a.c_str() + 7)));
+    else if (a.rfind("--bind=", 0) == 0) g_http_bind = a.substr(7);
+    else if (a.rfind("--token=", 0) == 0) g_http_token = a.substr(8);
+    else if (a == "--autoplay") g_autoplay = true;
     else if (a == "--accel") g_paint_mode = PaintMode::kAccel;
     else if (a == "--gpu") g_gpu_composite = true;
     else if (a == "--no-encode") g_encode = false;
@@ -699,7 +882,7 @@ int main(int argc, char* argv[]) {
   CefRefPtr<Client> client = new Client(osr);
   g_router->AddHandler(client.get(), false);
 
-  std::thread enc_thread, udp_thread, watcher, preview_thread;
+  std::thread enc_thread, udp_thread, http_thread, watcher, preview_thread;
 
   if (g_app_mode == AppMode::kRun) {
     // ===== [RUN MODE] paint=kSoftware(기본) 또는 kAccel(--accel, 실험) =====
@@ -709,7 +892,7 @@ int main(int argc, char* argv[]) {
     if (g_view) {   // --view: 같은 player.html 을 전체화면 창으로 (OnPaint/인코딩 없음)
       CefBrowserSettings bs;
       auto view = CefBrowserView::CreateBrowserView(
-          client, "file://" + g_webdir + "/player.html", bs, nullptr, nullptr, nullptr);
+          client, "file://" + g_webdir + "/player.html" + (g_autoplay ? "?autoplay=1" : ""), bs, nullptr, nullptr, nullptr);
       CefWindow::CreateTopLevelWindow(new WinDelegate(view, true));
     } else {
     CefWindowInfo wi;
@@ -721,13 +904,14 @@ int main(int argc, char* argv[]) {
     CefBrowserSettings bs;
     bs.windowless_frame_rate = g_paint_fps;
     bs.background_color = CefColorSetARGB(0, 0, 0, 0);   // 투명: 페이지 배경이 없으면 영상이 비침
-    CefBrowserHost::CreateBrowser(wi, client, "file://" + g_webdir + "/player.html", bs, nullptr,
-                                  nullptr);
+    CefBrowserHost::CreateBrowser(wi, client, "file://" + g_webdir + "/player.html" + (g_autoplay ? "?autoplay=1" : ""), bs,
+                                  nullptr, nullptr);
     }
 
     if (g_encode) enc_thread = std::thread(EncodeLoop);
     if (g_preview) preview_thread = std::thread(PreviewLoop);
     udp_thread = std::thread(UdpLoop, client);
+    http_thread = std::thread(HttpLoop, client);
     watcher = std::thread([&] {
       pthread_setname_np(pthread_self(), "cg-watch");
       auto t0 = std::chrono::steady_clock::now();
@@ -745,10 +929,11 @@ int main(int argc, char* argv[]) {
       }
       CefPostTask(TID_UI, base::BindOnce(&Client::Close, client));
     });
-    printf("[cg] run: project=%s out=%s paint=%s paint_fps=%d sync=%s (제어: UDP %d next|prev|goto N|quit)\n",
+    printf("[cg] run: project=%s out=%s paint=%s paint_fps=%d sync=%s (제어: HTTP %s:%d%s, UDP %d next|prev|goto N|quit)\n",
            g_project.c_str(), g_out.c_str(),
            g_view ? "view" : g_paint_mode == PaintMode::kAccel ? "accel" : g_gpu_composite ? "software+gpu" : "software",
-           g_paint_fps, g_sync && g_paint_fps == kFps ? "jitter-buffer(3)" : "latest", kCtlPort);
+           g_paint_fps, g_sync && g_paint_fps == kFps ? "jitter-buffer(3)" : "latest", g_http_bind.c_str(), g_http_port,
+           g_http_token.empty() ? "" : " (token)", kCtlPort);
   } else {
     // ===== [EDIT MODE] =====
     CefBrowserSettings bs;
@@ -762,6 +947,7 @@ int main(int argc, char* argv[]) {
   g_quit = true;
   if (watcher.joinable()) watcher.join();
   if (udp_thread.joinable()) udp_thread.join();
+  if (http_thread.joinable()) http_thread.join();
   if (enc_thread.joinable()) enc_thread.join();
   if (preview_thread.joinable()) preview_thread.join();
   g_video.Stop();

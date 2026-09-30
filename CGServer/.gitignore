@@ -1,4 +1,11 @@
 build/
+bin/*
+!bin/web/
+!bin/cgctl.sh
+!bin/media/
+bin/media/*
+!bin/media/.gitkeep
+!bin/project/
 bin/web/girsday.mp4
 lib/*.so
 lib/*.so.*
@@ -7,3 +14,4 @@ src/editor/client/dist/
 src/editor/server/templates.json
 src/editor/server/cg_projects/
 doc/cef/*.tar.gz
+src/cg-editor/.run/

@@ -7,7 +7,7 @@
       "displayName": "RK3588 (Debian 12 arm64) - Software OnPaint",
       "description": "기본 경로: CEF OnPaint(CPU BGRA) -> RGA -> MPP H.264. CEF_ROOT 환경변수 필요 (env.md 참고).",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/rk3588",
+      "binaryDir": "${sourceDir}/../../build/rk3588",
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",
@@ -24,7 +24,7 @@
       "displayName": "RK3588 (Debian 12 arm64) - Accel dmabuf (실험)",
       "description": "실험 경로: CEF OnAcceleratedPaint(dmabuf 제로카피) -> RGA -> MPP H.264. --accel 로 실행.",
       "inherits": "rk3588",
-      "binaryDir": "${sourceDir}/build/rk3588-accel",
+      "binaryDir": "${sourceDir}/../../build/rk3588-accel",
       "cacheVariables": {
         "ENABLE_ACCEL_PAINT": "ON"
       }

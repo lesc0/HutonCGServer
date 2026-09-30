@@ -307,3 +307,131 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
 - 버전: `7:4.3.4-1rockchip-r6-b230628` — 이름 그대로 **Rockchip이 커스터마이징한 빌드**이며,
   데비안 보안 저장소의 표준 `4.3.9`/`4.3.7`보다 우선순위(pin priority 100, 로컬/벤더 저장소)가 높게 잡혀 있어
   `apt install`만으로 이 버전이 선택됨. `ffmpeg`(CLI)도 같은 소스의 동일 버전.
+
+### [cg-editor] 메인 메뉴가 바깥을 눌러도 닫히지 않는 문제
+- 증상: 상단 메뉴(파일/편집/보기 …)를 열고 다른 곳을 눌러도 드롭다운이 계속 열려 있음.
+- 원인: [app/page.tsx](src/cg-editor/app/page.tsx)의 메뉴는 메뉴 버튼 토글(`setMenu(menu===name?null:name)`)과 항목 선택 시에만 닫혔고, 바깥 클릭 처리가 없었음.
+- 변경: `menu`가 열려 있는 동안 동작하는 `useEffect` 추가 (`openModal` 바로 위).
+  - `pointerdown` / `mousedown` / `touchstart`(capture)에서 대상이 `.menugroup` 밖이면 `setMenu(null)`
+  - `Escape` 키, 창 `blur` 시에도 닫힘
+  - 실행 취소/다시 실행 기록(history) 로직은 변경하지 않음
+- 확인: 개발 서버(5173)가 수정된 코드를 서빙하는 것과 VS Code 진단 오류 없음까지 확인.
+- 미해결: 사용자가 "메뉴를 두 번 눌러야 없어진다"고 보고. 브라우저에서 직접 재현하지 못해 원인 미확정.
+  - 확인 필요: 강력 새로고침(Ctrl+Shift+R) 후에도 동일한지, 바깥 클릭(a)인지 메뉴 버튼 재클릭(b)인지, 어느 영역(캔버스/패널/툴바)에서 발생하는지.
+
+### [cg-editor] 참고
+- `src/editor/client/src/TopBar.jsx`에도 별도의 상단 메뉴가 있으나(헤더에서 마우스가 벗어나면 닫힘) 이번에는 수정하지 않음.
+
+## 2026-10-01
+
+### 실행엔진 설계 + cg-streamer 구현 (cg-editor 결과물을 CEF 로 재생)
+
+- 배경: cef-mpp 는 테스트용 소스, 실제 작업은 `src/cg-streamer/`. cg-editor(Next.js) 가 저장하는 프로젝트 JSON 을
+  CEF 에서 그대로 재생하는 실행엔진을 만든다.
+- 결정:
+  - HTML 로 굽지 않고 **JSON 이 원본**, 공용 런타임이 JSON 을 읽어 렌더링 (글자 단위 렌더/효과 13종/시계/채널 상태머신이
+    canvas+시간 함수라 HTML 변환 시 미리보기와 출력이 달라질 위험).
+  - 영상 아이템의 효과는 실행엔진에서 지원하지 않음 (위치·크기·반복만 네이티브 MPP 로 전달).
+  - 제어는 UDP → **HTTP** (UDP 는 전환기 병행). 응답/상태 조회 가능, 256바이트 제한 없음.
+  - 폴더 규약: `bin/web/player.html`, `bin/web/cg-runtime.js`(공용), `bin/web/<프로젝트명>/project.json` + `media/`
+    (src 는 상대경로, 공용은 `bin/web/_shared/`).
+- 구현:
+  - `bin/web/cg-runtime.js` + `player.html`: cg-editor 의 model/effects/text-render 를 Konva 없이 Canvas2D 로 포팅.
+    Run Setting, Stamp 2채널, 효과 13종, 시계/계수기, 텍스트 갱신. 영상은 `cefQuery` 의 `video:*` 로 네이티브에 위임.
+  - `src/cg-streamer/main.cpp`: HTTP 제어 서버(`--http/--bind/--token`, 기본 127.0.0.1:5555), 엔드포인트
+    `/play /run /stop /clear /pause /cut /skip /next /prev /goto/N /stamp/{1|2}/{play|stop|pause} /global/{play|stop}`,
+    `PUT /text/{linkName}`, `GET /status`, `POST /quit`. 명령은 CEF UI 스레드에서 `cg.cmd()` 로 실행, 인자는 화이트리스트 +
+    JS 문자열 이스케이프. `cefQuery` 에 `base`(프로젝트 폴더 URL)·`state:`(상태 보고) 추가, `--autoplay` 추가.
+  - `bin/cgctl.sh`: UDP(nc) → HTTP(curl) 로 변경.
+  - 빌드: `CMakeLists.txt`/`CMakePresets.json` 을 `src/cg-streamer/` 로 이동, 실행파일 출력은 `bin/`
+    (CEF 런타임 파일도 bin/ 으로 복사, 웹은 `bin/web/` 그대로 사용). `.gitignore` 는 `bin/*` 무시 + `bin/web/`·`bin/cgctl.sh` 예외,
+    `doc/cef/*.tar.gz` 제외. `ZENV.md`/`cef_server_build.md` 빌드 명령 갱신.
+- 검증: 헤드리스 Chrome 에서 샘플 프로젝트 렌더(한글 자막/외곽선/그림자/시계/wipe·fade·scale) 및 goto/text/clear 명령 확인.
+  **C++ 변경은 Windows PC 에서 빌드하지 못해 컴파일 미검증** → 보드에서 빌드/송출 확인 필요.
+- 제약/미구현: 에디터 "내보내기"(media/ 로 풀고 src 상대경로화) 없음 → `data:`·`/api/media` 미디어는 실행 불가,
+  영상 동시 1개·Global 은 play/stop 만, 오디오 미재생, 폰트는 대상 머신에 설치 필요, clear/stop 은 Out 효과 없이 즉시.
+- 기타: 2개 커밋에 섞여 GitHub 100MB 제한에 걸린 `doc/cef/cef_custom_130_arm64.tar.gz` 를 제외하고 커밋을 합쳐 푸시(`eff7b0c`).
+- 문서: `doc/실행엔진설계.md`.
+
+### [cg-editor] 실행 스크립트 추가 (start/stop/build, .env.production)
+- `start.sh`·`stop.sh`·`build.sh` 및 Windows 용 `start.bat`·`stop.bat`·`build.bat` 추가 (src/cg-editor/).
+  - `build`: Node 22.13+ 확인, node_modules 없으면 `npm ci`, `npm run build` (`--install`/`--check` 옵션).
+  - `start`: 백그라운드 실행(PID/로그 `.run/`), 기본 개발 서버(5173), `--prod` 는 `dist/` 로 실행, `--port/--host/--fg` 옵션.
+  - `stop`: PID 의 프로세스 그룹/트리 종료.
+- `.env.production`: `CG_EDITOR_PORT=8080`(prod 모드 기본 포트, 옵션이 우선), `CG_EDITOR_HOST`(주석), `WRANGLER_SEND_METRICS=false`.
+  `CLOUDFLARE_CF_FETCH_ENABLED` 는 기본값이 꺼짐이라 넣지 않음. cg-editor `.gitignore` 의 `.env*` 때문에 커밋되지 않음.
+- 확인(Windows): `start.bat` 개발(5190)/`/prod`(8080) 기동 → HTTP 200, `stop.bat` 종료, `build.bat` 빌드 성공(`dist/`).
+  배치 파일은 CRLF, `timeout` 대신 `ping` 으로 대기(콘솔 없는 환경에서 timeout 이 실패). `.sh` 는 문법 검사만(bash -n).
+
+### [cg-editor] cg-editor3(doc/gptcode) 수정분 병합
+- 내용: Stamp Playback(두 자막 채널, Top/Bottom 배치, 독립 재생·정지·반복·갱신), Global Animation Playback(배경 영상, On Air, 재생·일시정지·되감기, 구간 재생), 채널 설정·미디어 JSON 저장/복원.
+- 방식: 덮어쓰기 없이 3-way 병합. 기준은 `CG-editor-source2.zip`, 내 쪽은 기존 src/cg-editor, 상대는 cg-editor3. 충돌 없음.
+- 대상: app/channels.tsx(신규), editor-canvas.tsx, globals.css, model.ts, page.tsx, tests/editor-checks.ts, 다운로드-실행안내.txt.
+- 확인: `tsc --noEmit` 통과. 화면 동작은 브라우저 확인 필요. 커밋/푸시는 아직 안 함.
+
+### [cg-editor] cg-editor2(doc/gptcode) 수정분 병합
+- 내용: Run Setting(페이지 구간·반복 횟수·대기·자동/수동), Playback(Clear·Cut·Skip·이전/다음), 효과 프리셋 수·Soft/Hard 보완.
+- 방식: 덮어쓰기 없이 3-way 병합. 기준(base)은 `doc/gptcode/CG-editor-source.zip`, 내 쪽은 기존 src/cg-editor, 상대는 cg-editor2.
+- 대상: app/attributes.tsx, editor-canvas.tsx, effects.ts, globals.css, model.ts, page.tsx, tests/editor-checks.ts, package-lock.json, 다운로드-실행안내.txt.
+- 유지한 기존 변경: 패널 높이 조절(rowsplit), 메뉴 바깥 클릭 닫기, Effect 체크 해제.
+- 확인: `tsc --noEmit` 통과. 화면 동작은 브라우저에서 확인 필요.
+- 백업: 병합 전 app/, tests/를 세션 임시 폴더에 복사해 둠.
+
+### [cg-editor] 미디어는 bin/media, 프로젝트는 bin/project (파일 서버 추가)
+- 폴더: `bin/media/`(이미지·영상·음성 원본), `bin/project/`(프로젝트 JSON). `.gitignore`: media 내용은 제외(`.gitkeep`만), project 는 추적.
+- 배경: 에디터 서버가 Cloudflare Worker 런타임(개발 vite+workerd, 프로덕션 wrangler)이라 디스크를 읽고 쓸 수 없음 →
+  **파일 서버 `scripts/files-server.mjs`**(의존성 없는 Node, 기본 127.0.0.1:8081)를 추가하고 `start`/`stop` 이 에디터와 함께 기동/종료.
+  - `GET /media[?kind=]` 목록, `GET /media/<파일>` 스트리밍(Range 지원), `GET /projects`, `GET|PUT /projects/<이름>`.
+  - 안전장치: 파일명 검증(경로 구분자/`..` 거부), 확장자 화이트리스트, CORS 는 에디터와 같은 호스트만, 프로젝트 50MB 제한,
+    저장은 임시 파일 후 교체, `cg-editor` 형식이 아니면 거부.
+  - 프로젝트 저장 시 `data:` 미디어는 `bin/media/import-<해시>.<확장자>` 로 풀고 `src` 를 `../media/<파일>` 로 치환(내보내기 갭 해소).
+- 에디터(`app/files.ts` 신규, `model.ts`, `page.tsx`, `channels.tsx`, `editor-canvas.tsx`, `audio-tracks.tsx`):
+  - 미디어 src 는 `../media/<파일>` 로 저장(project 폴더 기준 상대경로 → cg-streamer 가 그대로 읽음), 화면에서는 `mediaUrl()` 로 파일 서버 주소로 변환.
+  - 이미지·동영상·음성 버튼과 배경 영상(Global)은 PC 파일 선택 대신 **bin/media 목록 대화상자**에서 선택. 캔버스로 파일을 끌어다 놓으면 bin/media 에 같은 이름이 있을 때만 가져옴.
+  - "보관함(D1/R2) 저장" → "bin/project 에 저장"으로 교체(목록·열기 포함). PC JSON 저장/열기는 유지.
+- 설정: `src/cg-editor/.env`(공통: 포트 5173, 파일 서버 8081 등) 추가, `.env.production`(prod 8080)이 덮어씀, `--port/--host` 옵션이 최우선.
+  (`.env*` 는 cg-editor `.gitignore` 로 커밋되지 않음)
+- 검증: 파일 서버 단독 테스트(목록/Range/경로 탈출 차단/data: 풀기/CORS), `tsc --noEmit` 통과, Windows 에서 `start.bat`(dev 5173, prod 8080)·`stop.bat` 로
+  에디터+파일 서버 동시 기동/종료 확인. **브라우저에서 실제 UI(미디어 선택·저장·열기) 조작은 미확인.**
+- 제약: 파일 서버 포트는 `app/files.ts` 의 `FILES_PORT` 와 같아야 함. "PC에 JSON 저장"은 `../media/` 참조를 파일로 내장하지 않음.
+
+### 실행 파일 이름 cef_mpp → cg-streamer
+- CMake 타깃 `cg_streamer`, `OUTPUT_NAME cg-streamer` → 실행 파일 `bin/cg-streamer` (`project()` 이름도 `cg_streamer`).
+- `bin/cgctl.sh`(`pgrep -x cg-streamer`), `main.cpp` 사용법 주석, `ZENV.md`, `cef_server_build.md`, `doc/실행엔진설계.md` 의 명령어를 새 이름으로 변경.
+- 위의 이전 기록(2026-09-29 ~ 10-01)에 적힌 `cef_mpp` 는 당시 이름이라 그대로 둠. 이 PC(Windows)에서는 빌드하지 못해 보드에서 확인 필요.
+
+### [cg-editor] 화면 정리: 타임라인을 Playback 패널 탭으로, 행 3개 → 2개
+- 배경: 참고한 NABI HD(`doc/타사CG메뉴얼/NAVI.pptx`)는 위쪽(Page List / 캔버스 / Catalog)과 아래쪽(Attributes·Effects / Playback 계열 / Color) **2행**이고 타임라인 패널이 없음.
+  cg-editor 는 타임라인 행이 하나 더 있어 화면이 꽉 찼음.
+- 변경(`app/page.tsx`, `app/panels.tsx`, `app/globals.css`):
+  - Timeline 패널을 없애고 **Timeline / Playback 패널의 첫 탭(기본)** 으로 이동. 탭: Timeline · Playback · Run Setting · Stamp Playback · Global Animation Playback.
+  - 패널 배치 7칸 → 6칸(아래 행: Attributes 4칸 / Timeline·Playback 5칸 / Color 3칸), 행 높이 기본 280px(넓은 화면 300, 좁은 화면 260), 경계선 드래그 최소 100px.
+  - 탭 줄은 패널 맨 아래에 고정(내용만 스크롤) → Run Setting 등을 선택해도 탭이 올라가지 않음.
+  - 저장 키 갱신(`cg-layout-v3`, `cg-rows-v4`)으로 이전 배치/높이 설정은 무시되고 새 기본값 적용.
+- 검증: `tsc --noEmit` 통과. Chrome(CDP)로 1920×1080 에서 5개 탭 모두 탭 줄 위치 동일(top 1022) 확인, 화면 캡처 확인.
+  캔버스 영역 높이 570px.
+
+### [cg-editor] 미디어/프로젝트 선택 목록 정렬 수정
+- 증상: 미디어 선택 목록에서 항목이 세로로 눌려 파일명과 용량(두 줄)이 잘려 보임.
+- 원인: `.savedlist`(flex 세로 + max-height 280px) 안의 버튼이 항목이 많으면 flex 로 줄어듦(높이 25px).
+- 수정(`app/globals.css`): 버튼 `flex-shrink:0`, 최소 높이 48px, 세로 가운데 정렬, 긴 파일명은 말줄임, 목록 최대 높이 `min(420px,55vh)`. 프로젝트 열기 목록에도 같이 적용됨.
+- 확인: Chrome(CDP)으로 긴 파일명·11개 항목 캡처 확인(항목 높이 25px → 약 58px, 이름/용량 모두 표시).
+
+### [cg-editor] 파일 메뉴 정리 + 텍스트 영역 자동 맞춤
+- 파일 메뉴: 새 프로젝트 / 프로젝트 열기 / 프로젝트 저장 / PNG 내보내기 (툴바 설명·저장 대화상자 제목도 같은 이름). 동작은 그대로.
+- 텍스트 영역 자동 맞춤(`app/text-render.ts` `fitText`, `app/model.ts` `Item.autoSize`, `app/page.tsx`):
+  - 증상: 새 텍스트가 1400×180(또는 화면 오른쪽 끝까지 × 160)으로 만들어져 글자보다 영역이 너무 큼.
+  - 새로 만드는 텍스트/시계/계수기는 글자 크기에 맞춰 시작(예: 기본 자막 100px 글자 → 772×117). 글자·글꼴·크기·자간·외곽선 등을 바꾸면 영역도 다시 맞춤.
+  - W/H 를 직접 바꾸거나 핸들로 크기를 조절하면 자동 맞춤이 해제됨. 편집 메뉴 "텍스트 영역 맞춤"으로 다시 맞춤(선택한 개체).
+  - 폭 여백은 8 미만으로 줄이면 안 됨(drawText 가 `줄폭+글자폭 > w-8` 이면 줄바꿈 → 마지막 글자가 사라짐). 그림자 번짐은 영역에 포함하지 않음.
+  - 기존 프로젝트의 텍스트는 `autoSize:false` 라 그대로 유지됨.
+- 확인: `tsc --noEmit` 통과, Chrome(CDP)로 삽입→문자 결과 캡처 확인.
+
+### [cg-editor] 프로젝트 저장 / 새 이름으로 저장 분리
+- 파일 메뉴: 새 프로젝트 / 프로젝트 열기 / **프로젝트 저장** / **프로젝트 새 이름으로 저장** / PNG 내보내기.
+- **프로젝트 저장**(메뉴·툴바·Ctrl+S): 이름을 묻지 않고 `bin/project/<프로젝트 이름>.json` 에 바로 저장(이미 저장/열어 온 프로젝트는 덮어씀).
+  한 번도 저장하지 않은 새 프로젝트가 같은 이름의 기존 파일과 겹칠 때만 덮어쓰기 확인을 묻는다(이름은 묻지 않음).
+- **프로젝트 새 이름으로 저장**(메뉴·Ctrl+Shift+S): 이름 입력 창을 띄우고, 이미 있는 이름이면 덮어쓰기 확인. 창에는 "PC에 JSON 파일로 저장"도 있음.
+- 이전의 "날짜를 붙여 새 파일로 저장" 버튼과 3개 저장 버튼은 제거.
+- 확인(Chrome CDP): 새 이름으로 저장 → 이름 창 표시 → 임시 이름 저장 성공, 이어서 프로젝트 저장 → 창/확인창 없이 파일 갱신.
+  테스트 임시 파일은 삭제(기존 `test.json`, `test1.json`, `자막프로젝트.json` 은 그대로).

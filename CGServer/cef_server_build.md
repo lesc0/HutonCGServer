@@ -1,7 +1,7 @@
 # CEF 130 + Rockchip MPP 디코딩 패치 — 서버 빌드 가이드
 
 목표: 공식 CEF 바이너리에 없는 **H.264 디코더 + V4L2(libv4l-rkmpp → MPP) 하드웨어 디코딩**을 넣은
-CEF 130 linuxarm64를 x86_64 서버에서 크로스 빌드하고, 결과물만 CM3588 보드로 가져와 cef_mpp를 다시 빌드한다.
+CEF 130 linuxarm64를 x86_64 서버에서 크로스 빌드하고, 결과물만 CM3588 보드로 가져와 cg-streamer를 다시 빌드한다.
 
 > ⚠️ 공개 자료를 바탕으로 정리한 절차이며 **아직 실제로 돌려 보지 않았다.** 특히 2단계(패치 적용)의 충돌 여부는
 > 서버에서 확인해야 한다. 결과는 [../history.md](../history.md)에 기록할 것.
@@ -77,12 +77,12 @@ python3 automate-git.py --download-dir=$HOME/code/chromium_git \
   공통: `proprietary_codecs=true ffmpeg_branding="Chrome"`).
 - 결과물: `chromium_git/chromium/src/cef/binary_distrib/cef_binary_130.*_linuxarm64_minimal.tar.bz2`
 
-## 4. 보드로 가져와서 cef_mpp 재빌드
+## 4. 보드로 가져와서 cg-streamer 재빌드
 
 ```bash
 sudo tar xjf cef_binary_*_linuxarm64_minimal.tar.bz2 -C /opt/cef
 export CEF_ROOT=/opt/cef/<새 폴더>          # ~/.bashrc 의 CEF_ROOT 도 수정
-cd /root/work/CGServer && rm -rf build/rk3588
+cd /root/work/CGServer/src/cg-streamer && rm -rf ../../build/rk3588
 cmake --preset rk3588 && cmake --build --preset rk3588
 ```
 
@@ -96,10 +96,10 @@ cmake --preset rk3588 && cmake --build --preset rk3588
    하드웨어 디코딩은 GPU 프로세스에서 일어나므로 `--gpu`가 필요하다.
    ```bash
    cd build/rk3588/Release
-   CHROMIUM_USE_VDA=true ./cef_mpp --run --gpu --cef:use-gl=angle --cef:use-angle=gles-egl \
+   CHROMIUM_USE_VDA=true ./cg-streamer --run --gpu --cef:use-gl=angle --cef:use-angle=gles-egl \
      --cef:ozone-platform=headless --cef:enable-accelerated-video-decode \
      --project=<mp4 video 페이지 project.json> --out=test.ts --seconds=10
-   for p in $(pgrep -x cef_mpp); do tr '\0' ' ' </proc/$p/cmdline | grep -q gpu-process && ls -la /proc/$p/fd | grep -E 'mpp_service|mali0'; done
+   for p in $(pgrep -x cg-streamer); do tr '\0' ' ' </proc/$p/cmdline | grep -q gpu-process && ls -la /proc/$p/fd | grep -E 'mpp_service|mali0'; done
    ```
 3. `CHROMIUM_USE_VDA=true`, `--enable-accelerated-video-decode`는 FriendlyElec 설정
    (`/etc/chromium.org/03-nanopi6`)과 같은 조건. 패치에 따라 필요 여부가 다를 수 있음.
@@ -109,5 +109,5 @@ cmake --preset rk3588 && cmake --build --preset rk3588
 - 패치가 CEF 자체 패치와 충돌할 수 있다 — 가장 불확실한 단계.
 - 보드는 Debian 11 (glibc 2.31). Chromium 130 sysroot는 bullseye 기준으로 알려져 있어 문제없을 것으로 보지만,
   실행해서 확인해야 한다.
-- 현재 공식 CEF에 적용해 둔 cef_mpp CMakeLists 수정(`C CXX`, `PROJECT_ARCH=arm64`, `libcef_lib` 링크)은
+- 현재 공식 CEF에 적용해 둔 cg-streamer CMakeLists 수정(`C CXX`, `PROJECT_ARCH=arm64`, `libcef_lib` 링크)은
   새 CEF에서도 그대로 필요하다.

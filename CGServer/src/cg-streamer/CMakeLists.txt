@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.19)
-project(cef_mpp C CXX)
+project(cg_streamer C CXX)
 
 # 사용: cmake -G Ninja -DCEF_ROOT=/path/to/cef_binary_*_linuxarm64 -DCMAKE_BUILD_TYPE=Release ..
 set(CEF_ROOT "" CACHE PATH "CEF binary distribution root")
@@ -8,6 +8,7 @@ if(NOT CEF_ROOT)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
+get_filename_component(CG_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)   # 저장소 루트 (inc/, bin/)
 list(APPEND CMAKE_MODULE_PATH "${CEF_ROOT}/cmake")
 # CEF 는 CMAKE_HOST_SYSTEM_PROCESSOR == "arm64" 만 검사 → Linux 네이티브("aarch64")는
 # x86_64 로 오인해 -m64 -march=x86-64 를 붙임. 여기서 직접 지정.
@@ -29,28 +30,25 @@ endif()
 # libcef.so 자체 (wrapper 만으로는 cef_string_* 등 C API 심볼이 없음)
 ADD_LOGICAL_TARGET("libcef_lib" "${CEF_LIB_DEBUG}" "${CEF_LIB_RELEASE}")
 
-add_executable(cef_mpp
-  src/cef_mpp/main.cpp
-  src/cef_mpp/mpp_encoder.cpp
-  src/cef_mpp/ts_muxer.cpp
-  src/cef_mpp/video_source.cpp
-  src/cef_mpp/hdmirx_source.cpp)
+add_executable(cg_streamer
+  main.cpp
+  mpp_encoder.cpp
+  ts_muxer.cpp
+  video_source.cpp
+  hdmirx_source.cpp)
 option(ENABLE_ACCEL_PAINT "OnAcceleratedPaint(dmabuf) 실험 경로 (--accel)" OFF)
 if(ENABLE_ACCEL_PAINT)
-  target_compile_definitions(cef_mpp PRIVATE CG_ACCEL=1)
+  target_compile_definitions(cg_streamer PRIVATE CG_ACCEL=1)
 endif()
-SET_EXECUTABLE_TARGET_PROPERTIES(cef_mpp)
-add_dependencies(cef_mpp libcef_dll_wrapper)
-target_link_libraries(cef_mpp libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} rockchip_mpp rga PkgConfig::FFMPEG pthread ${X11_LIBRARIES} ${X11_Xext_LIB})
-target_include_directories(cef_mpp PRIVATE ${X11_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/inc)
+SET_EXECUTABLE_TARGET_PROPERTIES(cg_streamer)
+add_dependencies(cg_streamer libcef_dll_wrapper)
+target_link_libraries(cg_streamer libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} rockchip_mpp rga PkgConfig::FFMPEG pthread ${X11_LIBRARIES} ${X11_Xext_LIB})
+target_include_directories(cg_streamer PRIVATE ${X11_INCLUDE_DIR} ${CG_ROOT}/inc)
 
-# CEF 런타임 파일(libcef.so, pak, icudtl 등)을 실행 파일 옆으로 복사
-set(CEF_TARGET_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIGURATION>)
-set_target_properties(cef_mpp PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CEF_TARGET_OUT_DIR})
-COPY_FILES(cef_mpp "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${CEF_TARGET_OUT_DIR}")
-COPY_FILES(cef_mpp "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${CEF_TARGET_OUT_DIR}")
-
-# 저작/플레이어 웹 리소스(GrapesJS 포함)를 실행 파일 옆 web/ 으로 복사
-add_custom_command(TARGET cef_mpp POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_directory
-          ${CMAKE_CURRENT_SOURCE_DIR}/bin/web ${CEF_TARGET_OUT_DIR}/web)
+# 실행 파일은 bin/ 에 만든다. CEF 런타임 파일(libcef.so, pak, icudtl 등)도 그 옆으로 복사.
+# 웹 리소스(player.html, cg-runtime.js, 프로젝트별 폴더)는 bin/web/ 에 있으므로 복사하지 않는다
+# (실행 파일 옆 web/ 을 그대로 사용).
+set(CEF_TARGET_OUT_DIR ${CG_ROOT}/bin)
+set_target_properties(cg_streamer PROPERTIES OUTPUT_NAME cg-streamer RUNTIME_OUTPUT_DIRECTORY ${CEF_TARGET_OUT_DIR})   # 실행 파일: bin/cg-streamer
+COPY_FILES(cg_streamer "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${CEF_TARGET_OUT_DIR}")
+COPY_FILES(cg_streamer "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${CEF_TARGET_OUT_DIR}")
