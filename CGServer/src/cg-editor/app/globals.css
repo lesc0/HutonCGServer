@@ -131,3 +131,10 @@ input:disabled,textarea:disabled{background:#0a0d15;color:#55617c}
 /* 팝업/우클릭 메뉴는 패널 경계선(.rowsplit, z-index 20)보다 위에 표시: 팝업이 떠 있을 때 경계선이 선택/조작되지 않게 */
 .modalback{z-index:100}
 .contextmenu{z-index:101}
+
+/* 메인 메뉴 항목: 아이콘 + 글자 */
+.dropdown button{display:flex;align-items:center;gap:10px}
+.menuicon{display:inline-flex;width:18px;height:18px;align-items:center;justify-content:center;flex:none;color:var(--muted)}
+.dropdown button:hover .menuicon{color:#fff}
+.dropdown{width:max-content;min-width:240px}
+.dropdown button{justify-content:flex-start;text-align:left;white-space:nowrap;padding-right:18px}

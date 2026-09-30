@@ -479,3 +479,15 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
 - 툴바 첫 번째 버튼을 "새 페이지" → **"새 프로젝트"** 로 변경(파일 메뉴와 동일 함수 `newProject`, 수정 사항이 있으면 확인창). 새 페이지는 Page List "+ 추가"와 삽입 메뉴에 있음.
 - Timeline Preview 가 2페이지로 넘어가던 문제: Run Setting 의 Apply to Playback / All File Playback 으로 켜진 "이어서 재생(sequence)" 상태를 단일 페이지 미리보기(Timeline Preview, Effects Preview, 보기>미리보기, F5)가 끄지 않던 것이 원인 → 미리보기 시작 시 `sequence.current=false`.
   재현(Apply 후 Preview → 0.7초 만에 Page 2)과 수정 후(Page 1 유지) 확인.
+
+### 순위/기록 예제 프로젝트, 이동(moves) 기능, 메뉴 아이콘
+- **개체 이동(`moves`) 기능** (에디터 `app/model.ts`·`editor-canvas.tsx`, 실행엔진 `bin/web/cg-runtime.js` 공용):
+  `Item.moves=[{t:시작, dur:걸리는 시간, x?, y?}]` — 지정한 시각에 새 위치로 부드럽게(easeInOutCubic) 이동. 순위 변동 등에 사용.
+  normalizeProject 가 moves 를 검증해 보존(최대 500개, 값 범위 제한). 편집 UI 는 없음(JSON 작성, 재생/저장은 지원).
+- 예제 프로젝트(`bin/project/`): `수영-기록.json`(남자 100m 자유형 1~10등 기록, 청록), `육상-기록.json`(남자 100m 1~10등, 주황),
+  `종합순위-변동.json`(5라운드에 걸쳐 점수가 바뀌고 순위가 변하면 줄이 새 자리로 이동, ▲/▼ 변동 표시, 30초 반복).
+  기록판은 `linkName`(r1_name, r1_time …)으로 HTTP `PUT /text/<이름>` 갱신 가능(순위표에서 갱신 동작 확인). 샘플 데이터는 가상.
+  경기 스코어보드/리그 순위표/이름·점수 순위표는 방향이 바뀌어 삭제.
+- 메인 메뉴 항목별 **아이콘**(`app/menu-icons.tsx`), 메뉴 글자 왼쪽 정렬·폭 자동(긴 항목 줄바꿈 방지).
+- 확인: `tsc --noEmit` 통과, 실행엔진/에디터 캡처(이동 전·중·후), moves 보존(130개 개체 일치), 메뉴 4종 캡처.
+- 남은 제안(답변 대기): 실시간 순위 변경 HTTP 명령, moves 편집 UI, 기록이 흐르며 순위가 바뀌는 레이스형, 열 때 미디어 확인 경고, 도움말 하단 상태 문구 정리, 창 메뉴 패널 이름 한글화.

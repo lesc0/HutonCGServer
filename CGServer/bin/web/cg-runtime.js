@@ -21,7 +21,7 @@ const ITEM_DEFAULTS = {
   shadowColor: '#000000', shadowBlur: 4, shadowDepth: 8, shadowAngle: 45, hidden: false, start: 0, duration: 10,
   effect: 'none', outEffect: 'none', inDuration: 1, outDuration: 1, direction: 'left', speed: 1, volume: 1, trim: 0,
   mediaLoop: false, background: false, runs: [], clockFormat: 'HH:mm:ss', timerSeconds: 300, timerCount: 'down',
-  effectPreset: 0, tileX: 8, tileY: 8, softness: 0, effectBorder: 0, curlRadius: 60, effectAngle: 0, blinkCount: 4,
+  moves: [], effectPreset: 0, tileX: 8, tileY: 8, softness: 0, effectBorder: 0, curlRadius: 60, effectAngle: 0, blinkCount: 4,
 };
 const PAGE_OPTION_KEYS = ['direction', 'effectPreset', 'tileX', 'tileY', 'softness', 'effectBorder', 'curlRadius',
   'effectAngle', 'blinkCount', 'speed'];
@@ -106,6 +106,21 @@ function channelStep(st, delta, duration, loops, delay = 0, manual = false) {
   const cycle = st.cycle + Math.floor(total / period);
   if (loops > 0 && cycle > loops) return Object.assign({}, st, { time: length, cycle: loops, playing: false, visible: false });
   return Object.assign({}, st, { time: total % period, cycle });
+}
+
+// ---------- 위치 이동 (model.ts moveOffset): moves=[{t,dur,x?,y?}] ----------
+function moveOffset(i, time) {
+  let cx = i.x, cy = i.y;
+  for (const m of [...(i.moves || [])].sort((a, b) => a.t - b.t)) {
+    const tx = m.x ?? cx, ty = m.y ?? cy;
+    if (time >= m.t + m.dur) { cx = tx; cy = ty; continue; }
+    if (time > m.t) {
+      const q = Math.max(0, Math.min(1, (time - m.t) / Math.max(0.001, m.dur))), e = q < 0.5 ? 4 * q * q * q : 1 - Math.pow(-2 * q + 2, 3) / 2;
+      return { x: cx + (tx - cx) * e - i.x, y: cy + (ty - cy) * e - i.y };
+    }
+    break;
+  }
+  return { x: cx - i.x, y: cy - i.y };
 }
 
 // ---------- 효과 (effects.ts visual) ----------
@@ -268,7 +283,8 @@ function drawItem(c, item, time, page) {
   const v = visual(item, time, page.mode, page.duration);
   c.save();
   c.globalAlpha *= item.opacity * v.opacity;
-  c.translate(item.x + v.x, item.y + v.y);
+  const mo = moveOffset(item, time);
+  c.translate(item.x + v.x + mo.x, item.y + v.y + mo.y);
   c.rotate((item.rotation + v.rotation) * Math.PI / 180);
   c.scale(v.scaleX, v.scaleY);
   if (v.clip) { v.clip(c); c.clip(); }
