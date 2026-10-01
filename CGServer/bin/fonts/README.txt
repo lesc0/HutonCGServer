@@ -12,3 +12,12 @@
 - 에디터: 글꼴 목록은 에디터 화면을 새로고침(F5)하면 다시 읽습니다.
 - 송출 엔진: 폰트를 추가한 뒤 cg-streamer 를 다시 시작해야 합니다(bin/stop.sh, bin/start.sh).
 - fonts.css 는 파일 서버가 이 폴더를 읽어 자동으로 만들므로 직접 고치지 마세요(git 에도 올라가지 않음).
+
+기본 포함 폰트 (모두 SIL Open Font License 1.1 — 상업 방송 사용 가능, 폰트 단독 판매만 금지)
+- 고딕/본문 : NanumGothic, NotoSansKR, GothicA1, IBMPlexSansKR, GowunDodum
+- 명조/바탕 : NanumMyeongjo, GowunBatang
+- 제목/장식 : BlackHanSans, DoHyeon, Jua, Gugi, YeonSung
+- 손글씨    : NanumPenScript, Gaegu, PoorStory, HiMelody
+- 구글 폰트 저장소(github.com/google/fonts, ofl/)에서 받아 .woff2 로 변환했습니다. NotoSansKR 은 가변 폰트를 400/700 으로 나눈 것입니다.
+- BlackHanSans, DoHyeon, Jua, Gugi, Gaegu, YeonSung 은 상용 한글 2,350자만 들어 있어 드문 글자는 대체 글꼴로 나옵니다.
+- 각 폰트의 라이선스 전문은 licenses/ 폴더에 있습니다. 이 폴더를 다른 곳에 옮기거나 배포할 때 함께 두세요.
