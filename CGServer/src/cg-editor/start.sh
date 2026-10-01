@@ -1,22 +1,23 @@
 #!/bin/bash
 # cg-editor 시작 (백그라운드 실행, PID/로그는 .run/ 에 저장)
-#   ./start.sh                개발 서버(npm run dev, 기본 포트 5173)
-#   ./start.sh --prod         빌드 결과(dist/)로 실행(npm start). 먼저 ./build.sh 필요
-#   ./start.sh --port 8080    포트 지정 (개발 서버 기본 5173)
+#   ./start.sh                프로덕션 서버(npm start, 기본 포트 5173). 먼저 ./build.sh 필요
+#   ./start.sh --dev          개발 서버(npm run dev)
+#   ./start.sh --port 8080    포트 지정 (기본 5173)
 #   ./start.sh --host 0.0.0.0 다른 PC 에서도 접속 (기본은 127.0.0.1 전용)
 #   ./start.sh --fg           백그라운드로 보내지 않고 이 터미널에서 실행 (Ctrl+C 로 종료)
 # 종료: ./stop.sh     로그: tail -f .run/cg-editor.log
 set -e
 cd "$(dirname "$(readlink -f "$0")")"
 
-MODE=dev; PORT=""; HOST=""; FG=0
+MODE=prod; PORT=""; HOST=""; FG=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --prod) MODE=prod ;;
+    --dev) MODE=dev ;;
     --port) PORT="$2"; shift ;;
     --host) HOST="$2"; shift ;;
     --fg) FG=1 ;;
-    -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
     *) echo "알 수 없는 옵션: $1"; exit 1 ;;
   esac
   shift
