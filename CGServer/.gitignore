@@ -9,8 +9,9 @@ bin/media/*
 !bin/media/.gitkeep
 !bin/project/
 bin/web/girsday.mp4
-lib/*.so
-lib/*.so.*
+lib/*
+!lib/*.tar.gz
+!lib/*.tgz
 node_modules/
 src/editor/client/dist/
 src/editor/server/templates.json
