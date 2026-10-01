@@ -12,14 +12,15 @@
 # 환경변수로 바꿀 수 있음 (기본값은 지금 쓰던 값):
 #   CG_PROJECT=자막프로젝트     송출할 프로젝트 이름 (bin/project/<이름>.json)
 #   CG_UDP=10.10.10.18:1234    cgsetup.cfg 의 udp_ip/udp_port 대신 쓸 목적지 (임시 테스트용, 지정 시 cfg보다 우선)
-#   CG_EDITOR_PORT=5173        cg-editor 포트
+#   CG_EDITOR_PORT=8080        cg-editor 포트 (기본: cg-editor/.env.production 값)
 #   DISPLAY=:0                 Chromium·해상도 설정에 쓸 X 디스플레이
 set -u
 cd "$(dirname "$(readlink -f "$0")")"
 mkdir -p log .run
 
 PROJECT=${CG_PROJECT:-자막프로젝트}
-PORT=${CG_EDITOR_PORT:-5173}
+# 에디터 포트: 환경변수 > cg-editor 의 .env/.env.production(production 기본이라 .env.production 이 우선) > 5173
+PORT=${CG_EDITOR_PORT:-$(set -a; . ../src/cg-editor/.env 2>/dev/null; . ../src/cg-editor/.env.production 2>/dev/null; echo "${CG_EDITOR_PORT:-5173}")}
 export DISPLAY=${DISPLAY:-:0}
 EDITOR_DIR=../src/cg-editor
 CHROMIUM=/opt/chromium.org/stable/chromium-browser
