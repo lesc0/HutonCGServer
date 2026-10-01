@@ -773,3 +773,9 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
 - 포트가 또 바뀌어도: `cgsetup.cfg`의 `editor_port`만 고치고 `bin/stop.sh` → `bin/start.sh`. 에디터 `start.sh`가 실제로 쓴 포트를 `.run/cg-editor.port`에 기록하고 `stop.sh`가 그 포트도 정리하므로,
   설정을 바꾼 뒤 stop 해도 예전 포트의 서버가 남지 않음(8090 으로 띄운 뒤 설정 8080 상태에서 stop → 8090 종료 확인). `stop.sh`의 고정 포트(5173/8080) 강제 종료는 제거.
 - 파일 서버 포트 8081 은 아직 `app/files.ts`(`FILES_PORT`)에 상수로 박혀 있어 설정 대상이 아님(바꾸려면 코드 수정+재빌드 필요).
+
+### 운영 메모: 메모리 사용 현황 (보드 3.9GB, 스왑 없음)
+- 점검 시점 사용 약 2.1GB / 여유 154MB(캐시 제외 available 약 1.4GB). 묶음별 RSS(공유 메모리 중복 포함이라 합이 실사용보다 큼):
+  VS Code 서버+확장 ~1,056MB · cg-streamer(엔진·GPU·렌더러) ~1,009MB · Chromium 키오스크 ~886MB · Claude Code ~301MB · Xorg ~197MB · cg-editor(에디터+파일 서버) ~159MB · Codex 확장 ~144MB.
+- 앞서 `tsc`가 exit 137(OOM)로 죽고 에디터/파일 서버가 같이 종료된 원인. 빌드/타입체크 전에 cg-streamer 정지(~1GB 확보)·키오스크 Chromium 종료(~0.9GB 확보)하면 안전.
+  확인 명령: `ps -eo pid,user,rss,pmem,cmd --sort=-rss | head`, `free -m`.
