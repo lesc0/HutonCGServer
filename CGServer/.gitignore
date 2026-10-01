@@ -4,6 +4,7 @@ bin/*
 !bin/cgctl.sh
 !bin/start.sh
 !bin/stop.sh
+!bin/rebuild.sh
 !bin/cgsetup.cfg
 !bin/media/
 bin/media/*

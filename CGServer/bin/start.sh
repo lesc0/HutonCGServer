@@ -13,6 +13,7 @@
 #   CG_PROJECT=자막프로젝트     송출할 프로젝트 이름 (bin/project/<이름>.json)
 #   CG_UDP=10.10.10.18:1234    cgsetup.cfg 의 udp_ip/udp_port 대신 쓸 목적지 (임시 테스트용, 지정 시 cfg보다 우선)
 #   CG_EDITOR_PORT=8080        cg-editor 포트 (기본: cgsetup.cfg 의 editor_port)
+#   CG_SKIP_STREAMER=1 / CG_SKIP_KIOSK=1   cg-streamer / 키오스크는 시작하지 않음 (rebuild.sh 가 사용)
 #   DISPLAY=:0                 Chromium·해상도 설정에 쓸 X 디스플레이
 set -u
 cd "$(dirname "$(readlink -f "$0")")"
@@ -35,6 +36,7 @@ else
   (cd "$EDITOR_DIR" && ./start.sh --port "$PORT") || echo "  시작 실패 (수동으로 $EDITOR_DIR/start.sh 확인)"
 fi
 
+if [ "${CG_SKIP_STREAMER:-0}" = 1 ]; then echo "[2/3] cg-streamer 건너뜀(CG_SKIP_STREAMER=1)"; else
 echo "[2/3] cg-streamer (project=$PROJECT, 송출 설정은 cgsetup.cfg${CG_UDP:+", udp=$CG_UDP(override)"})"
 if pgrep -f "cg-streamer --run" >/dev/null; then
   echo "  이미 실행 중"
@@ -45,7 +47,9 @@ else
   sleep 2
   pgrep -f "cg-streamer --run" >/dev/null && echo "  시작됨" || echo "  시작 실패 (log/cg-streamer.log 확인)"
 fi
+fi
 
+if [ "${CG_SKIP_KIOSK:-0}" = 1 ]; then echo "[3/3] Chromium 키오스크 건너뜀(CG_SKIP_KIOSK=1)"; else
 echo "[3/3] Chromium 키오스크 (cg-editor 화면)"
 if [ -f "$CHROMIUM_PIDF" ] && kill -0 "$(cat "$CHROMIUM_PIDF")" 2>/dev/null; then
   echo "  이미 실행 중"
@@ -61,4 +65,5 @@ else
   echo $! > "$CHROMIUM_PIDF"
   disown
   echo "  시작됨 (pid $(cat "$CHROMIUM_PIDF"))"
+fi
 fi

@@ -779,3 +779,8 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
   VS Code 서버+확장 ~1,056MB · cg-streamer(엔진·GPU·렌더러) ~1,009MB · Chromium 키오스크 ~886MB · Claude Code ~301MB · Xorg ~197MB · cg-editor(에디터+파일 서버) ~159MB · Codex 확장 ~144MB.
 - 앞서 `tsc`가 exit 137(OOM)로 죽고 에디터/파일 서버가 같이 종료된 원인. 빌드/타입체크 전에 cg-streamer 정지(~1GB 확보)·키오스크 Chromium 종료(~0.9GB 확보)하면 안전.
   확인 명령: `ps -eo pid,user,rss,pmem,cmd --sort=-rss | head`, `free -m`.
+
+### bin/rebuild.sh 신설: 메모리 확보하며 에디터 빌드
+- `bin/rebuild.sh [--check]`: 실행 중이던 것(cg-streamer, 키오스크)을 기억 → `stop.sh`(송출·키오스크·에디터 정지) → `src/cg-editor/build.sh` → 원래 켜져 있던 것만 `start.sh`로 재시작. 빌드 실패 시에도 이전 빌드로 다시 띄움(종료 코드는 빌드 결과).
+- `bin/start.sh`에 `CG_SKIP_STREAMER=1` / `CG_SKIP_KIOSK=1` 환경변수 추가(해당 단계 건너뜀, rebuild.sh 가 사용). `.gitignore`에 `!bin/rebuild.sh`.
+- 효과: 송출·키오스크를 내린 상태에서는 빌드의 타입 검사가 5.6초에 끝남(송출 중에는 3분 이상 걸리거나 OOM). 이후 에디터 빌드는 `bin/rebuild.sh` 사용 권장.
