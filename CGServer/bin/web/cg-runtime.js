@@ -280,6 +280,7 @@ function drawItem(c, item, time, page) {
   if (item.hidden || item.type === 'audio' || item.type === 'video') return;   // 영상은 네이티브가 그림
   const state = effectState(item, time, page.mode, page.duration);
   if (!state.active) return;
+  if (isCssCrawl(item)) return;   // CSS DOM 오버레이가 대신 그림(syncCrawlOverlays) - 캔버스에는 안 그림
   const v = visual(item, time, page.mode, page.duration);
   c.save();
   c.globalAlpha *= item.opacity * v.opacity;
@@ -314,6 +315,79 @@ function drawItem(c, item, time, page) {
     c.fillStyle = g; c.fill();
   }
   c.restore();
+}
+
+// ---------- crawl/roll 텍스트: 캔버스 대신 CSS transform/animation로 그림 ----------
+// 이유: 캔버스는 매 프레임 메인 스레드에서 다시 그리는 방식이라, 메인 스레드가 조금만 밀려도
+// 그대로 끊겨 보인다. CSS animation은 컴포지터 스레드가 보간해서 메인 스레드 지연의 영향을 덜 받는다.
+// 범위: type==='text', effect가 'crawl'|'roll' 로 직접 지정된 경우만(페이지 전체 Crawl/Roll 모드 제외),
+// outEffect 없음, runs(부분 글자 스타일) 없음 - 일반적인 자막 티커 용도. 그 외(멀티라인/부분 스타일/
+// outEffect 조합 등)는 기존처럼 캔버스로 그린다.
+function isCssCrawl(item) {
+  return item.type === 'text' && (item.effect === 'crawl' || item.effect === 'roll') &&
+    item.outEffect === 'none' && (!item.runs || !item.runs.length);
+}
+const crawlDoms = new Map();   // item.id -> {el, sig, needResync, lastElapsed, lastTime, lastPlaying}
+let crawlStyleEl = null;
+function ensureCrawlStyleEl() {
+  if (!crawlStyleEl) { crawlStyleEl = document.createElement('style'); document.head.appendChild(crawlStyleEl); }
+  return crawlStyleEl;
+}
+function syncCrawlOverlays(page, time, playing) {
+  const activeIds = new Set();
+  for (const item of page.items) {
+    if (!isCssCrawl(item) || item.hidden) continue;
+    const state = effectState(item, time, page.mode, page.duration);
+    if (!state.active) continue;
+    activeIds.add(item.id);
+    let rec = crawlDoms.get(item.id);
+    if (!rec) {
+      const el = document.createElement('div');
+      Object.assign(el.style, { position: 'absolute', whiteSpace: 'nowrap', lineHeight: '1', willChange: 'transform' });
+      document.body.appendChild(el);
+      rec = { el, sig: '' };
+      crawlDoms.set(item.id, rec);
+    }
+    const el = rec.el;
+    const horizontal = item.effect === 'crawl';
+    const dist = (horizontal ? W + item.w : H + item.h) * item.speed;
+    const sign = (horizontal ? item.direction === 'right' : item.direction === 'down') ? 1 : -1;
+    const sig = [item.x, item.y, item.w, item.h, item.size, item.family, item.bold, item.italic, item.fill,
+      item.stroke, item.strokeWidth, item.opacity, item.duration, item.speed, item.direction, item.effect,
+      item.text].join('|');
+    if (rec.sig !== sig) {
+      rec.sig = sig;
+      const name = 'cgcrawl_' + item.id.replace(/[^\w-]/g, '');
+      const axis = horizontal ? 'X' : 'Y';
+      const css = ensureCrawlStyleEl();
+      css.textContent = css.textContent.replace(new RegExp('@keyframes ' + name + '\\{[^}]*\\}[^}]*\\}', ''), '') +
+        `@keyframes ${name}{from{transform:translate${axis}(0)}to{transform:translate${axis}(${sign * dist}px)}}`;
+      el.textContent = item.text;
+      Object.assign(el.style, {
+        left: item.x + 'px', top: item.y + 'px', width: item.w + 'px', height: item.h + 'px',
+        font: `${item.italic ? 'italic ' : ''}${item.bold ? 'bold ' : ''}${item.size}px "${item.family}"`,
+        color: item.fill,
+        WebkitTextStroke: item.strokeWidth > 0 ? `${item.strokeWidth * 2}px ${item.stroke}` : '',
+        opacity: String(item.opacity),
+        animationName: name, animationDuration: item.duration + 's', animationTimingFunction: 'linear',
+        animationFillMode: 'forwards', animationIterationCount: '1',
+      });
+      rec.needResync = true;
+    }
+    const elapsed = Math.max(0, Math.min(item.duration, time - item.start));
+    const expected = (rec.lastElapsed != null && rec.lastPlaying === playing && playing)
+      ? rec.lastElapsed + (time - rec.lastTime) : null;
+    if (rec.needResync || expected == null || Math.abs(elapsed - expected) > 0.15) {
+      el.style.animationDelay = (-elapsed) + 's';
+      rec.needResync = false;
+    }
+    el.style.animationPlayState = playing ? 'running' : 'paused';
+    el.style.display = 'block';
+    rec.lastElapsed = elapsed; rec.lastTime = time; rec.lastPlaying = playing;
+  }
+  for (const [id, rec] of crawlDoms) {
+    if (!activeIds.has(id) && rec.el.style.display !== 'none') { rec.el.style.display = 'none'; rec.needResync = true; }
+  }
 }
 
 function drawPage(c, page, time) {
@@ -498,6 +572,7 @@ function frame(now) {
   if (sec !== lastSec) { lastSec = sec; if (hasClock()) dirty = true; }
 
   syncVideo();
+  syncCrawlOverlays(main.visible ? pageAt(main.index) : { items: [] }, main.time, main.playing);
   if (dirty) { dirty = false; render(); }
   report(now);
 }

@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html,body{margin:0;padding:0;width:1920px;height:1080px;background:transparent;overflow:hidden}
+  .bar{position:absolute;left:0;top:880px;width:1920px;height:110px;background:#0a2a52;opacity:.92}
+  .crawl{
+    position:absolute;top:899px;left:1920px;height:72px;white-space:nowrap;
+    font:bold 60px '맑은 고딕',sans-serif;color:#fff;
+    -webkit-text-stroke:2px #000;
+    will-change:transform;
+    animation:crawl 26s linear infinite;
+  }
+  @keyframes crawl{
+    from{transform:translateX(0)}
+    to{transform:translateX(-8148px)}  /* (화면폭+글자폭) 만큼 왼쪽으로: crawl_text speed=1 과 동일 거리/시간 */
+  }
+</style>
+</head>
+<body>
+  <div class="bar"></div>
+  <div class="crawl">Huton CG Editor 가로 스크롤 예제입니다  ●  CSS transform/animation 테스트 - 메인 스레드 지연에 영향 안 받는지 확인용  ●  긴 문장도 끝까지 흘러갑니다</div>
+  <script>
+    if (window.cefQuery) window.cefQuery({request:'ready', onSuccess(){}, onFailure(){}});
+  </script>
+</body>
+</html>

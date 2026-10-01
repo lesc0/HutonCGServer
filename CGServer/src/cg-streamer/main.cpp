@@ -100,6 +100,7 @@ static bool g_sync = true;                       // UI 지터 버퍼 사용 (--n
 static std::string g_project = "project.json";
 static std::string g_out = "udp://127.0.0.1:1234?pkt_size=1316";
 static std::string g_exe, g_webdir;
+static std::string g_page = "player.html";   // --page=이름.html : 진단/테스트용, bin/web/ 기준 다른 페이지 로드
 
 // cgsetup.cfg: output=1(HDMI만) 2(UDP만, 기본) 3(HDMI+UDP) / udp_ip / udp_port
 // 입력(HDMI RX)은 자동 감지이므로 설정 대상 아님. --setup= 로 경로 변경 가능, 커맨드라인 인자가 항상 우선.
@@ -982,6 +983,7 @@ int main(int argc, char* argv[]) {
     else if (a == "--view") g_view = true, g_encode = false;
     else if (a == "--preview") g_preview = true;
     else if (a.rfind("--paint-fps=", 0) == 0) g_paint_fps = std::max(1, std::min(g_fps, atoi(a.c_str() + 12)));
+    else if (a.rfind("--page=", 0) == 0) g_page = a.substr(7);
 #if 0
     else if (a.rfind("--dump-onpaint=", 0) == 0) g_dump_path = a.substr(15);
     else if (a.rfind("--dump-seconds=", 0) == 0) g_dump_seconds = std::max(1, atoi(a.c_str() + 15));
@@ -1027,7 +1029,7 @@ int main(int argc, char* argv[]) {
     if (g_view) {   // --view: 같은 player.html 을 전체화면 창으로 (OnPaint/인코딩 없음)
       CefBrowserSettings bs;
       auto view = CefBrowserView::CreateBrowserView(
-          client, "file://" + g_webdir + "/player.html" + (g_autoplay ? "?autoplay=1" : ""), bs, nullptr, nullptr, nullptr);
+          client, "file://" + g_webdir + "/" + g_page + (g_autoplay ? "?autoplay=1" : ""), bs, nullptr, nullptr, nullptr);
       CefWindow::CreateTopLevelWindow(new WinDelegate(view, true));
     } else {
     CefWindowInfo wi;
@@ -1042,7 +1044,7 @@ int main(int argc, char* argv[]) {
     CefBrowserSettings bs;
     bs.windowless_frame_rate = g_paint_fps;
     bs.background_color = CefColorSetARGB(0, 0, 0, 0);   // 투명: 페이지 배경이 없으면 영상이 비침
-    CefBrowserHost::CreateBrowser(wi, client, "file://" + g_webdir + "/player.html" + (g_autoplay ? "?autoplay=1" : ""), bs,
+    CefBrowserHost::CreateBrowser(wi, client, "file://" + g_webdir + "/" + g_page + (g_autoplay ? "?autoplay=1" : ""), bs,
                                   nullptr, nullptr);
     }
 #if 0
