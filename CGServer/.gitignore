@@ -22,3 +22,4 @@ src/editor/server/templates.json
 src/editor/server/cg_projects/
 doc/cef/*.tar.gz
 src/cg-editor/.run/
+*.tsbuildinfo
