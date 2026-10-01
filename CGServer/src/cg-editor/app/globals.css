@@ -162,3 +162,6 @@ input:disabled,textarea:disabled{background:#0a0d15;color:#55617c}
 .char-stylegrid .swatch{height:36px}
 .char-stylegrid .swatch b{font-size:22px}
 .char-stylegrid span{font-size:11px}
+
+/* Color 패널: RGBA 입력을 팔레트 아래 가로 한 줄로 배치 */
+.channels{flex-direction:row;flex-wrap:wrap;width:auto;gap:8px;padding:0 9px 6px}

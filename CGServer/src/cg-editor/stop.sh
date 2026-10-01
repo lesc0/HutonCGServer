@@ -1,38 +1,46 @@
 #!/bin/bash
-# cg-editor 종료 (start.sh 가 만든 .run/cg-editor.pid 의 프로세스 그룹을 종료)
+# cg-editor 종료: 에디터 + 파일 서버. pid 파일의 프로세스 그룹을 종료하고,
+# setsid 로 pid 가 어긋나거나 리더만 먼저 죽어 자식이 남는 경우를 대비해 포트(에디터/파일 서버)를 잡고 있는 프로세스도 정리한다.
 #   ./stop.sh
 cd "$(dirname "$(readlink -f "$0")")"
 PIDF=.run/cg-editor.pid
 FPIDF=.run/cg-files.pid
 
-# 파일 서버 종료 (에디터 pid 파일이 없어도 정리)
-if [ -f "$FPIDF" ]; then
-  FPID=$(cat "$FPIDF")
-  kill -TERM -- "-$FPID" 2>/dev/null || kill -TERM "$FPID" 2>/dev/null
-  rm -f "$FPIDF"
-  echo "파일 서버 종료"
-fi
+# start.sh 와 같은 순서로 .env 를 읽어 포트를 구한다 (.env -> .env.production)
+set -a
+[ -f .env ] && . ./.env
+[ -f .env.production ] && . ./.env.production
+set +a
+EPORT=${CG_EDITOR_PORT:-5173}
+FILES_PORT=${CG_FILES_PORT:-8081}
 
-if [ ! -f "$PIDF" ]; then
-  echo "실행 중이 아닙니다 (pid 파일 없음)"
-  exit 0
-fi
-PID=$(cat "$PIDF")
-if ! kill -0 "$PID" 2>/dev/null; then
-  echo "이미 종료되어 있습니다 (오래된 pid $PID 정리)"
-  rm -f "$PIDF"
-  exit 0
-fi
+listening() { # 포트 $@ 중 하나라도 LISTEN 중이면 0 (소유자와 무관하게 확인: fuser 는 다른 사용자 프로세스를 못 봄)
+  local p; for p in "$@"; do [ -n "$(ss -ltnH "sport = :$p" 2>/dev/null)" ] && return 0; done; return 1
+}
 
-# setsid 로 시작했으므로 PID == 프로세스 그룹 ID. 그룹 전체에 SIGTERM
-kill -TERM -- "-$PID" 2>/dev/null || kill -TERM "$PID" 2>/dev/null
+killgroup() { # $1=pid : 그룹 전체에 TERM (리더가 이미 죽었어도 그룹이 남아 있으면 종료됨)
+  kill -TERM -- "-$1" 2>/dev/null || kill -TERM "$1" 2>/dev/null
+}
+
+for f in "$FPIDF" "$PIDF"; do
+  [ -f "$f" ] && killgroup "$(cat "$f")"
+done
+
+# 포트 기준 정리 (pid 파일이 틀려도 확실히 종료)
+for p in "$EPORT" "$FILES_PORT" 5173 8080; do
+  fuser -k -TERM "$p"/tcp >/dev/null 2>&1
+done
 for _ in $(seq 1 20); do
-  kill -0 "$PID" 2>/dev/null || break
+  listening "$EPORT" "$FILES_PORT" || break
   sleep 0.25
 done
-if kill -0 "$PID" 2>/dev/null; then
-  echo "정상 종료되지 않아 강제 종료합니다"
-  kill -KILL -- "-$PID" 2>/dev/null || kill -KILL "$PID" 2>/dev/null
+for p in "$EPORT" "$FILES_PORT"; do
+  fuser -k -KILL "$p"/tcp >/dev/null 2>&1
+done
+rm -f "$PIDF" "$FPIDF"
+
+if listening "$EPORT" "$FILES_PORT"; then
+  echo "종료하지 못한 프로세스가 있습니다 (다른 사용자(root) 소유일 수 있음): sudo ./stop.sh"
+  exit 1
 fi
-rm -f "$PIDF"
-echo "종료했습니다"
+echo "종료했습니다 (에디터 :$EPORT, 파일 서버 :$FILES_PORT)"
