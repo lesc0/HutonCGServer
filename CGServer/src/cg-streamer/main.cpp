@@ -3,6 +3,9 @@
 //   ./cg-streamer --run   [--project=project.json] [--udp=host:port | --out=URL또는파일.ts] [--seconds=N]
 //   실험: cmake -DENABLE_ACCEL_PAINT=ON 빌드 후 --accel (OnAcceleratedPaint dmabuf, GPU 경로)
 //         --gpu : OnPaint 경로 그대로, GPU 합성만 켬 (disable-gpu 생략, 예: --cef:use-angle=gles-egl)
+//   실험: cmake -DENABLE_EXTERNAL_BEGIN_FRAME=ON 빌드(CG_EBF) 시, CEF 내부 60Hz 타이머 대신
+//         EncodeLoop 틱(kFps)이 매번 SendExternalBeginFrame 으로 직접 그리기를 요청한다.
+//         기본 빌드(OFF)는 기존처럼 windowless_frame_rate 기반 CEF 자체 타이머를 그대로 사용.
 //   --http=PORT : HTTP 제어 포트 (기본 5555)  --bind=ADDR (기본 127.0.0.1)  --token=문자열 (Authorization: Bearer)
 //   --autoplay : 로딩 후 Run Setting 시작 페이지부터 자동 재생 (기본은 출력을 비워 두고 명령 대기)
 //   --view : 전체화면 창으로 재생 (DISPLAY 필요, 인코딩 없음)
@@ -10,10 +13,13 @@
 //   --no-encode : 렌더링만 (인코딩/전송 없음, CEF 자체 부하 측정용)
 //   --no-sync : UI 지터 버퍼 끔 (항상 최신 그림 — 지연 0 이지만 CEF 박자와 어긋나 0/2프레임씩 끊김)
 //   --paint-fps=N : CEF 렌더링 fps (기본 60). 인코딩/출력은 60fps 유지(직전 프레임 반복)
+//   --dump-onpaint=path.mp4 [--dump-seconds=N, 기본 8] : 진단용. OnPaint 원본 BGRA 를
+//         RGA/MPP/UDP 전혀 안 거치고 소프트웨어 H.264(libx264)로 그대로 mp4 기록.
+//         PTS 는 실제 도착 시각(ms) 그대로(VFR) - CEF 자체가 고르게 그리는지 영상에 그대로 드러남.
 //         추가 크로미움 스위치: --cef:이름[=값]  (예: --cef:use-angle=gles)
 //   --setup=cgsetup.cfg : 송출 설정 파일 (기본 ./cgsetup.cfg, 없으면 기본값 사용)
-//         output=1(HDMI만) 2(UDP만, 기본) 3(HDMI+UDP) / udp_ip=... / udp_port=...
-//         커맨드라인의 --udp=/--out=/--view/--preview 는 이 파일보다 항상 우선
+//         output=1(HDMI만) 2(UDP만, 기본) 3(HDMI+UDP) / udp_ip=... / udp_port=... / fps=... (기본 60)
+//         커맨드라인의 --udp=/--out=/--view/--preview/--paint-fps= 는 이 파일보다 항상 우선
 //   출력: H.264(MPP) -> MPEG-TS(ffmpeg muxer) -> UDP (기본 udp://127.0.0.1:1234)
 //   --run 은 동시에 하나만: 두 번째 실행은 즉시 종료됨 (/tmp/cg-streamer.run.lock)
 // 실행 중 제어(UDP 127.0.0.1:5555):  echo next | nc -u -w0 127.0.0.1 5555
@@ -59,6 +65,7 @@
 #include "hdmirx_source.h"
 #include "video_source.h"
 #include "ts_muxer.h"
+#include "cef_dumper.h"
 
 // X11 은 CEF 헤더 뒤에 포함(Success/None 등 매크로가 CEF의 동명 심볼과 충돌).
 #include <X11/Xlib.h>
@@ -70,7 +77,8 @@
 
 extern char** environ;
 
-static constexpr int kW = 1920, kH = 1080, kFps = 60;
+static constexpr int kW = 1920, kH = 1080;
+static int g_fps = 60;   // cgsetup.cfg: fps=... (인코더 rc/EncodeLoop 틱/기본 페인트 fps 공통)
 static constexpr int kBitrate = 8 * 1000 * 1000;
 static constexpr int kCtlPort = 5555;
 
@@ -86,7 +94,7 @@ static bool g_gpu_composite = false;             // --gpu: kSoftware 에서도 G
 static bool g_view = false;                      // --view: OSR 대신 전체화면 창으로 재생 (HDMI 확인용, 인코딩 없음)
 static bool g_preview = false;                   // --preview: 인코딩(UI+영상 합성) 결과를 그대로 로컬 X11 창에도 표시
 static bool g_encode = true;                     // --no-encode: 렌더링만 (RGA/MPP/TS 없음, CEF 부하 측정용)
-static int g_paint_fps = kFps;                   // --paint-fps=N: CEF 렌더링 fps (인코딩은 kFps 유지)
+static int g_paint_fps = g_fps;                  // --paint-fps=N: CEF 렌더링 fps (기본은 g_fps 와 동일)
 static bool g_sync = true;                       // UI 지터 버퍼 사용 (--no-sync: 최신 그림만)
 
 static std::string g_project = "project.json";
@@ -99,6 +107,15 @@ static std::string g_setup_cfg = "cgsetup.cfg";
 static int g_output_type = 2;
 static std::string g_udp_ip = "127.0.0.1";
 static int g_udp_port = 1234;
+
+// 진단용: --dump-onpaint=path.mp4 [--dump-seconds=N] - OnPaint 원본을 RGA/MPP/UDP 없이 그대로 mp4 로 기록
+// 지금은 안 씀 (끊김 원인이 CEF 자체 렌더링임을 확인하는 데 썼음) - 코드는 남겨두고 꺼둠
+#if 0
+static std::string g_dump_path;
+static int g_dump_seconds = 8;
+static CefDumper g_dumper;
+static std::chrono::steady_clock::time_point g_dump_t_end;
+#endif
 
 // HTTP 제어 (--http=PORT --bind=ADDR --token=TOKEN). 기본은 loopback 전용, 토큰 없음.
 static int g_http_port = kCtlPort;               // TCP 와 UDP 포트는 별개라 같은 번호를 써도 충돌하지 않는다
@@ -114,7 +131,7 @@ static pid_t g_child = 0;
 static CefRefPtr<CefMessageRouterBrowserSide> g_router;
 
 // UI 지터 버퍼: CEF 는 자체 60Hz 로 그리고 인코더는 별도 60Hz 타이머로 돈다. 두 박자가 어긋나면
-// "같은 그림 2번 / 1장 건너뜀"이 생겨 티커 등이 끊겨 보이므로, 그림을 3장 쌓아 두고(지연 약 50ms)
+// "같은 그림 2번 / 1장 건너뜀"이 생겨 티커 등이 끊겨 보이므로, 그림을 5장 쌓아 두고(지연 약 83ms)
 // 매 틱 1장씩 꺼내 도착 간격의 흔들림을 흡수한다.
 struct UiFrame {
   std::vector<uint8_t> px;                          // BGRA (프리멀티플라이드 알파)
@@ -185,6 +202,7 @@ static void LoadSetupCfg(const std::string& path) {
     if (k == "output") g_output_type = atoi(v.c_str());
     else if (k == "udp_ip") g_udp_ip = v;
     else if (k == "udp_port") g_udp_port = atoi(v.c_str());
+    else if (k == "fps") g_fps = std::max(1, atoi(v.c_str()));
   }
 }
 
@@ -212,14 +230,23 @@ class Client : public CefClient,
                const void* buffer, int w, int h) override {
     if (g_paint_mode != PaintMode::kSoftware) return;
     if (type != PET_VIEW || w != kW || h != kH) return;
+#if 0   // 진단용 OnPaint 덤프 (지금은 꺼둠)
+    if (g_dumper.Active()) {
+      if (std::chrono::steady_clock::now() < g_dump_t_end) g_dumper.PushFrame(buffer);
+      else g_dumper.Close();
+    }
+#endif
     if (!g_encode) { g_paints++; return; }   // --no-encode: 복사도 생략
-    std::lock_guard<std::mutex> lk(g_store.m);
     UiFrame f;
-    if (!g_store.pool.empty()) { f.px = std::move(g_store.pool.back()); g_store.pool.pop_back(); }
+    f.at = std::chrono::steady_clock::now();
+    {
+      std::lock_guard<std::mutex> lk(g_store.m);
+      if (!g_store.pool.empty()) { f.px = std::move(g_store.pool.back()); g_store.pool.pop_back(); }
+    }
     f.px.resize((size_t)w * h * 4);
     memcpy(f.px.data(), buffer, (size_t)w * h * 4);  // BGRA
+    std::lock_guard<std::mutex> lk(g_store.m);
     f.seq = ++g_store.seq;
-    f.at = std::chrono::steady_clock::now();
     g_store.last_at = f.at;
     g_store.q.push_back(std::move(f));
     if (g_store.q.size() > kUiMax) {
@@ -281,6 +308,19 @@ class Client : public CefClient,
   void Exec(std::string js) {
     if (browser_) browser_->GetMainFrame()->ExecuteJavaScript(js, "", 0);
   }
+#ifdef CG_EBF
+  // browser_는 UI 스레드에서만 접근한다. UI가 늦으면 요청을 누적하지 않는다.
+  void RequestBeginFrame() {
+    if (begin_frame_pending_.exchange(true)) return;
+    if (!CefPostTask(TID_UI, base::BindOnce(&Client::BeginFrame, CefRefPtr<Client>(this))))
+      begin_frame_pending_ = false;
+  }
+  void BeginFrame() {
+    begin_frame_pending_ = false;
+    if (!g_quit && browser_ && osr_) browser_->GetHost()->SendExternalBeginFrame();
+  }
+  std::atomic<bool> begin_frame_pending_{false};
+#endif
 
   // --- JS -> 네이티브 (cefQuery) ---
   bool OnQuery(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, int64_t, const CefString& request,
@@ -449,32 +489,43 @@ class WinDelegate : public CefWindowDelegate {
 };
 
 // ---------- 실행 모드 보조 스레드 ----------
-static void EncodeLoop() {
+static void EncodeLoop(CefRefPtr<Client> client) {
   pthread_setname_np(pthread_self(), "cg-encode");
-  if (!g_encoder.Init(kW, kH, kFps, kBitrate)) { g_quit = true; return; }
+  if (!g_encoder.Init(kW, kH, g_fps, kBitrate)) { g_quit = true; return; }
   g_enc_ok = true;
   TsMuxer mux;
-  if (!mux.Open(g_out, kW, kH, kFps)) { g_quit = true; return; }
+  if (!mux.Open(g_out, kW, kH, g_fps)) { g_quit = true; return; }
 
   using clk = std::chrono::steady_clock;
-  const auto period = std::chrono::nanoseconds(1000000000LL / kFps);
+  const auto period = std::chrono::nanoseconds(1000000000LL / g_fps);
   auto next = clk::now();
   uint64_t frames = 0, bytes = 0, last_paints = 0, converted_seq = 0, uploaded_seq = 0, underflows = 0;
-  const bool jitter_buf = g_sync && g_paint_fps == kFps;   // --paint-fps 가 60 미만이면 최신 그림 방식
+  const bool jitter_buf = g_sync && g_paint_fps == g_fps;   // --paint-fps 가 60 미만이면 최신 그림 방식
   UiFrame cur;                  // 현재 출력 중인 UI 그림 (EncodeLoop 소유)
   bool primed = false;
   auto over_since = clk::time_point{};   // 큐가 목표 수위를 넘은 시점 (1초 이상 지속되면 1장 버려 지연 복귀)
   auto t0 = clk::now();
+#ifdef CG_EBF
+  const auto paint_period = std::chrono::nanoseconds(1000000000LL / g_paint_fps);
+  auto next_paint = next;
+#endif
 
   while (!g_quit) {
-    if (!g_ready) {               // 로딩 중 화면은 인코딩하지 않음 (렌더링은 계속 요청해야 ready 가 옴)
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      next = clk::now();
-      t0 = next;
-      continue;
-    }
     next += period;
     std::this_thread::sleep_until(next);
+    // 긴 처리 지연 뒤에 지난 틱을 몰아서 실행하지 않는다.
+    const auto tick_now = clk::now();
+    if (tick_now - next >= period) next = tick_now;
+#ifdef CG_EBF
+    if (tick_now >= next_paint) {
+      client->RequestBeginFrame();
+      do { next_paint += paint_period; } while (next_paint <= tick_now);
+    }
+#endif
+    if (!g_ready) {               // 로딩 중 화면은 인코딩하지 않음 (렌더링은 계속 요청해야 ready 가 옴)
+      t0 = clk::now();
+      continue;
+    }
 
     if (g_paint_mode == PaintMode::kSoftware) {   // 이번 틱에 출력할 UI 그림 선택
       std::lock_guard<std::mutex> lk(g_store.m);
@@ -486,9 +537,9 @@ static void EncodeLoop() {
       if (!jitter_buf) {
         while (!g_store.q.empty()) take();         // 최신 그림만
       } else {
-        // 2장 쌓였거나, 1장이라도 2프레임 넘게 기다렸으면(정지 화면 등) 출력 시작
+        // 목표 수위를 확보하거나, 정지 화면의 첫 그림도 목표 지연 후 출력한다
         if (!primed && !g_store.q.empty() &&
-            (g_store.q.size() >= kUiPrime || clk::now() - g_store.q.front().at >= period * 2))
+            (g_store.q.size() >= kUiPrime || clk::now() - g_store.q.front().at >= period * kUiPrime))
           primed = true;
         if (primed) {
           if (!g_store.q.empty()) take();
@@ -540,7 +591,7 @@ static void EncodeLoop() {
       continue;                     // 아직 프레임 없음
     frames++;
 
-    if (frames % kFps == 0) {
+    if (frames % g_fps == 0) {
       double sec = std::chrono::duration<double>(clk::now() - t0).count();
       uint64_t p = g_paints.load();
       size_t ql;
@@ -619,7 +670,7 @@ static void PreviewLoop() {
   }
 
   using clk = std::chrono::steady_clock;
-  const auto period = std::chrono::milliseconds(1000 / kFps);   // 원본과 동일한 60fps
+  const auto period = std::chrono::milliseconds(1000 / g_fps);   // 원본과 동일한 60fps
   auto next = clk::now();
   int cur = 0;
   uint64_t drawn = 0, skipped_pending = 0;   // 진단용: X 서버가 못 따라와서 건너뛴 횟수
@@ -909,6 +960,7 @@ int main(int argc, char* argv[]) {
     if (!strncmp(argv[i], "--setup=", 8)) g_setup_cfg = argv[i] + 8;
   LoadSetupCfg(g_setup_cfg);
   g_out = "udp://" + g_udp_ip + ":" + std::to_string(g_udp_port) + "?pkt_size=1316";
+  g_paint_fps = g_fps;   // cfg 의 fps 를 CEF 페인트 fps 기본값에도 반영 (--paint-fps= 로 다시 덮어쓸 수 있음)
   if (g_output_type == 1) { g_view = true; g_encode = false; }  // HDMI 직결만: 로컬 전체화면, 인코딩/UDP 없음
   else if (g_output_type == 3) g_preview = true;                // HDMI+UDP 동시: 인코딩 결과를 로컬 창에도 표시
 
@@ -929,7 +981,11 @@ int main(int argc, char* argv[]) {
     else if (a == "--no-sync") g_sync = false;
     else if (a == "--view") g_view = true, g_encode = false;
     else if (a == "--preview") g_preview = true;
-    else if (a.rfind("--paint-fps=", 0) == 0) g_paint_fps = std::max(1, std::min(kFps, atoi(a.c_str() + 12)));
+    else if (a.rfind("--paint-fps=", 0) == 0) g_paint_fps = std::max(1, std::min(g_fps, atoi(a.c_str() + 12)));
+#if 0
+    else if (a.rfind("--dump-onpaint=", 0) == 0) g_dump_path = a.substr(15);
+    else if (a.rfind("--dump-seconds=", 0) == 0) g_dump_seconds = std::max(1, atoi(a.c_str() + 15));
+#endif
     else if (a.rfind("--cef:", 0) == 0) g_extra.push_back(a.substr(6));
   }
 #ifndef CG_ACCEL
@@ -980,25 +1036,40 @@ int main(int argc, char* argv[]) {
 #ifdef CG_ACCEL
     wi.shared_texture_enabled = (g_paint_mode == PaintMode::kAccel);  // dmabuf 로 OnAcceleratedPaint 호출
 #endif
+#ifdef CG_EBF
+    wi.external_begin_frame_enabled = !g_view;  // CEF 자체 타이머 끔: SendExternalBeginFrame 으로만 그려짐
+#endif
     CefBrowserSettings bs;
     bs.windowless_frame_rate = g_paint_fps;
     bs.background_color = CefColorSetARGB(0, 0, 0, 0);   // 투명: 페이지 배경이 없으면 영상이 비침
     CefBrowserHost::CreateBrowser(wi, client, "file://" + g_webdir + "/player.html" + (g_autoplay ? "?autoplay=1" : ""), bs,
                                   nullptr, nullptr);
     }
+#if 0
+    if (!g_dump_path.empty() && g_dumper.Open(g_dump_path, kW, kH, g_paint_fps))
+      g_dump_t_end = std::chrono::steady_clock::now() + std::chrono::seconds(g_dump_seconds);
+#endif
 
-    if (g_encode) enc_thread = std::thread(EncodeLoop);
+    if (g_encode) enc_thread = std::thread(EncodeLoop, client);
     if (g_preview) preview_thread = std::thread(PreviewLoop);
     udp_thread = std::thread(UdpLoop, client);
     http_thread = std::thread(HttpLoop, client);
     watcher = std::thread([&] {
       pthread_setname_np(pthread_self(), "cg-watch");
       auto t0 = std::chrono::steady_clock::now();
-      int ticks = 0;
+      auto last_stat = t0;
       uint64_t last_paints = 0;
       while (!g_quit) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        if (!g_encode && !g_view && ++ticks % 10 == 0) {   // --no-encode: EncodeLoop 대신 paint 통계
+#ifdef CG_EBF
+        if (!g_encode && !g_view) {
+          std::this_thread::sleep_for(std::chrono::nanoseconds(1000000000LL / g_paint_fps));
+          client->RequestBeginFrame();
+        } else
+#endif
+        { std::this_thread::sleep_for(std::chrono::milliseconds(100)); }
+        const auto now = std::chrono::steady_clock::now();
+        if (!g_encode && !g_view && now - last_stat >= std::chrono::seconds(1)) {
+          last_stat = now;   // --no-encode: EncodeLoop 대신 paint 통계
           uint64_t p = g_paints.load();
           printf("[stat] no-encode paint=%llu/s\n", (unsigned long long)(p - last_paints));
           last_paints = p;
@@ -1008,10 +1079,13 @@ int main(int argc, char* argv[]) {
       }
       CefPostTask(TID_UI, base::BindOnce(&Client::Close, client));
     });
+#ifdef CG_EBF
+    if (!g_view) printf("[cg] frame clock: external begin frame (%dfps, UI-thread requests)\n", g_paint_fps);
+#endif
     printf("[cg] run: project=%s out=%s paint=%s paint_fps=%d sync=%s (제어: HTTP %s:%d%s, UDP %d next|prev|goto N|quit)\n",
            g_project.c_str(), g_out.c_str(),
            g_view ? "view" : g_paint_mode == PaintMode::kAccel ? "accel" : g_gpu_composite ? "software+gpu" : "software",
-           g_paint_fps, g_sync && g_paint_fps == kFps ? "jitter-buffer(3)" : "latest", g_http_bind.c_str(), g_http_port,
+           g_paint_fps, g_sync && g_paint_fps == g_fps ? "jitter-buffer(5)" : "latest", g_http_bind.c_str(), g_http_port,
            g_http_token.empty() ? "" : " (token)", kCtlPort);
   } else {
     // ===== [EDIT MODE] =====

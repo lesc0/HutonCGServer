@@ -50,7 +50,7 @@ bool MppH264Encoder::Init(int width, int height, int fps, int bitrate_bps) {
 
   mpp_enc_cfg_set_s32(cfg_, "rc:mode", MPP_ENC_RC_MODE_CBR);
   mpp_enc_cfg_set_s32(cfg_, "rc:fps_in_flex", 0);
-  mpp_enc_cfg_set_s32(cfg_, "rc:fps_in_num", fps);
+  mpp_enc_cfg_set_s32(cfg_, "rc:fps_in_num", fps);  // cgsetup.cfg: fps=... 로 조정
   mpp_enc_cfg_set_s32(cfg_, "rc:fps_in_denorm", 1);
   mpp_enc_cfg_set_s32(cfg_, "rc:fps_out_flex", 0);
   mpp_enc_cfg_set_s32(cfg_, "rc:fps_out_num", fps);

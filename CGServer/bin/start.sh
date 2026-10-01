@@ -1,5 +1,6 @@
 #!/bin/bash
 # 보드 화면에 지금과 같은 구성으로 띄우기: cg-editor(웹) + cg-streamer(UDP 송출, 로컬 미리보기 없음) + Chromium 키오스크(cg-editor 화면).
+# cg-streamer는 --gpu로 띄움: 안 주면 CEF가 GPU를 꺼서(disable-gpu-compositing) 페인트가 ~11fps로 떨어짐(가로스크롤 등에서 끊김의 원인이었음).
 #   ./start.sh     모두 시작 (이미 떠 있으면 건너뜀)
 # 종료: ./stop.sh
 #
@@ -32,7 +33,7 @@ echo "[2/3] cg-streamer (project=$PROJECT, 송출 설정은 cgsetup.cfg${CG_UDP:
 if pgrep -f "cg-streamer --run" >/dev/null; then
   echo "  이미 실행 중"
 else
-  nohup ./cg-streamer --run --project="project/$PROJECT.json" ${CG_UDP:+--udp="$CG_UDP"} --autoplay \
+  nohup ./cg-streamer --run --project="project/$PROJECT.json" ${CG_UDP:+--udp="$CG_UDP"} --gpu --autoplay \
     > log/cg-streamer.log 2>&1 &
   disown
   sleep 2

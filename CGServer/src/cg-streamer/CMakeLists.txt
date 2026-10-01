@@ -21,7 +21,7 @@ add_subdirectory(${CEF_LIBCEF_DLL_WRAPPER_PATH} libcef_dll_wrapper)
 include_directories(${CEF_ROOT})
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil)
+pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswscale)
 find_package(X11 REQUIRED)
 if(NOT X11_Xext_FOUND)
   message(FATAL_ERROR "libXext(-dev) 필요 (MIT-SHM, --preview 용)")
@@ -35,10 +35,15 @@ add_executable(cg_streamer
   mpp_encoder.cpp
   ts_muxer.cpp
   video_source.cpp
-  hdmirx_source.cpp)
+  hdmirx_source.cpp
+  cef_dumper.cpp)
 option(ENABLE_ACCEL_PAINT "OnAcceleratedPaint(dmabuf) 실험 경로 (--accel)" OFF)
 if(ENABLE_ACCEL_PAINT)
   target_compile_definitions(cg_streamer PRIVATE CG_ACCEL=1)
+endif()
+option(ENABLE_EXTERNAL_BEGIN_FRAME "SendExternalBeginFrame 으로 CEF 내부 타이머 대신 EncodeLoop 틱이 직접 그리기 요청 (실험)" OFF)
+if(ENABLE_EXTERNAL_BEGIN_FRAME)
+  target_compile_definitions(cg_streamer PRIVATE CG_EBF=1)
 endif()
 SET_EXECUTABLE_TARGET_PROPERTIES(cg_streamer)
 add_dependencies(cg_streamer libcef_dll_wrapper)
