@@ -673,3 +673,37 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
 - `bin/start.sh`에 `--gpu --cef:use-angle=gles-egl` 기본 적용. 커밋 `e9ea8fe`.
 - 교훈: 증상(끊김)을 고치려고 여러 렌더링 기법(EBF/CSS/캐싱)을 바꿔치기하기 전에, 먼저 "진짜 GPU를 쓰고 있는지"부터 확인했어야
   시간을 아꼈을 것. `ps aux`로 gpu-process 커맨드라인의 `--use-gl`/`--use-angle` 값을 확인하는 게 가장 빠른 1차 점검 포인트.
+
+## 2026-10-01 (이어서 3) — 업스트림 병합, start.sh 기본 production, 패널 배치, stop.sh 보강
+
+### git 업스트림 받기 (충돌 해결)
+- 원격의 cg-editor 성능 개선 커밋(`a7a77b6`)을 `git pull --rebase --autostash`로 받음. 로컬 수정과 `page.tsx`/`stream-control.tsx`가 충돌.
+  업스트림(attrPatch 등 성능 개선, `document.hidden` 폴링 중단)을 기준으로 두고 로컬 변경분(`char-stylegrid`, 'Stream Control' 탭 이름·맨 앞 순서,
+  "Refresh list" 주석)만 다시 얹어서 해결. 충돌 마커 없음·`tsc --noEmit` 통과 확인.
+
+### cg-editor/start.sh 기본 모드를 production 으로
+- `./start.sh` → `npm start`(빌드 결과 `.next/` 사용, `./build.sh` 선행 필요). 개발 서버는 `./start.sh --dev`. `--prod`는 호환용으로 유지.
+- 도움말의 옛 `dist/` 표기를 `.next/`로 정정. `bin/start.sh`는 옵션 없이 호출하므로 자동으로 production 으로 뜸.
+- 포트는 `.env.production`의 `CG_EDITOR_PORT=8080`(에디터), 파일 서버 8081.
+
+### 패널 기본 배치 변경 (24칸 그리드, `panels.tsx` slots)
+- 윗줄: Pages 1~5 / Canvas 5~21 / Style Catalog 21~25. 아랫줄: Attributes 1~10 / Timeline·Playback 10~21(이전 10~20) / Color 21~25(이전 20~25).
+  → Color 폭이 Style Catalog와 같아지고, Timeline 오른쪽 끝이 Canvas 오른쪽 끝과 맞음.
+- Timeline 을 Canvas 와 완전히 같은 폭(16칸)으로 하려면 Attributes 를 4칸으로 줄여야 해서(내용 최소폭이 커 가로스크롤 발생) 보류.
+- Color 패널: R/G/B/A 입력을 팔레트 옆 세로 열에서 팔레트 아래 가로 한 줄로 이동(`.channels`). 레이아웃은 localStorage 에 순서만 저장되므로 슬롯 변경은 즉시 반영.
+
+### stop.sh: 8080 이 안 죽던 문제
+- 원인 1: `bin/stop.sh`는 원래 cg-editor 를 일부러 남겨두게 돼 있었음 → 이제 마지막에 `src/cg-editor/stop.sh`도 호출해 함께 종료.
+- 원인 2: `src/cg-editor/stop.sh`가 pid 파일에 의존했는데, `setsid` 때문에 파일 서버 pid 가 실제와 1 어긋나고(10707 vs 10706), 에디터는 리더(npm)만 먼저 죽고
+  자식(`next-server`)이 남아 "이미 종료됨"으로 오판. → 그룹 TERM + 에디터/파일 서버 포트를 잡은 프로세스 직접 종료(TERM 후 KILL)로 변경.
+- 종료 확인을 `fuser`가 아닌 `ss -ltn`으로 함: `fuser`는 다른 사용자(root) 프로세스를 못 봐서 root 서버가 살아 있는데도 "종료했습니다"라고 거짓 성공을 출력했음.
+  못 죽이면 `sudo ./stop.sh` 안내와 함께 종료 코드 1.
+
+### 교훈: root 로 띄운 서버/빌드의 소유권 충돌
+- 터미널에서 root 로 `build`/`start`를 하면 `.next/`, `.run/`, `bin/.run/`이 root 소유가 되어 이후 pi 로 `build.sh`가 `EACCES`(`.next/trace`)로 실패하고, `bin/start.sh`도 pid 파일을 못 씀.
+  해결: `sudo ./stop.sh` 후 `sudo chown -R pi:pi .next .run`, `bin/.run` 도 동일. 앞으로는 root 가 아닌 pi 로 `./start.sh` 사용.
+- 빌드를 다시 하면 이미 떠 있는 서버(옛 빌드를 메모리에 가짐)는 청크 해시 불일치로 화면이 깨지므로 **빌드 후 반드시 서버 재시작**.
+
+### 참고: Text Link
+- Attributes 창의 Text Link = 선택한 텍스트 객체를 외부 `.txt` 와 연결. File System Access API 지원 브라우저는 2초마다 파일 변경을 감지해 자동 반영,
+  미지원 브라우저는 선택 시점 1회만 읽음. 연결된 객체는 직접 편집 불가, `linkName`으로 cg-streamer `PUT /text/<linkName>` 갱신과도 연결됨.
