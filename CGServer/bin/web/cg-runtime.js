@@ -22,6 +22,7 @@ const ITEM_DEFAULTS = {
   effect: 'none', outEffect: 'none', inDuration: 1, outDuration: 1, direction: 'left', speed: 1, volume: 1, trim: 0,
   mediaLoop: false, background: false, runs: [], clockFormat: 'HH:mm:ss', timerSeconds: 300, timerCount: 'down',
   moves: [], effectPreset: 0, tileX: 8, tileY: 8, softness: 0, effectBorder: 0, curlRadius: 60, effectAngle: 0, blinkCount: 4,
+  radius: 0, shapeKind: '', gradient: '', stripe: '',
 };
 const PAGE_OPTION_KEYS = ['direction', 'effectPreset', 'tileX', 'tileY', 'softness', 'effectBorder', 'curlRadius',
   'effectAngle', 'blinkCount', 'speed'];
@@ -270,10 +271,69 @@ function imageFor(src) {
   return im.complete && im.naturalWidth ? im : null;
 }
 
-function pathRounded(c, i) {   // 사각형 / 타원
+// ---------- 도형(rect/ellipse) 확장: 모서리 반경·다각형·그라데이션·줄무늬 ----------
+// editor 의 src/cg-editor/app/shapes.ts 와 동일한 로직. 한쪽을 고치면 다른 쪽도 같이 고칠 것.
+const arcPts = (cx, cy, r, a0, a1, n = 18) => Array.from({ length: n + 1 }, (_, k) => {
+  const a = (a0 + (a1 - a0) * k / n) * Math.PI / 180; return [cx + r * Math.cos(a), cy + r * Math.sin(a)]; });
+const SHAPE_POINTS = {
+  triangle: [[.5, 0], [1, 1], [0, 1]], wedge: [[0, .62], [1, 0], [.5, 1]], quarter: [[0, 1], ...arcPts(0, 1, 1, -90, 0)],
+  parallelogram: [[.2, 0], [1, 0], [.8, 1], [0, 1]], trapezoid: [[.15, 0], [.85, 0], [1, 1], [0, 1]],
+  slant: [[.04, 0], [1, 0], [.96, 1], [0, 1]], diamond: [[.5, 0], [1, .5], [.5, 1], [0, .5]],
+  pentagon: [[.5, 0], [1, .38], [.82, 1], [.18, 1], [0, .38]], hexagon: [[.25, 0], [.75, 0], [1, .5], [.75, 1], [.25, 1], [0, .5]],
+  chevron: [[0, 0], [.7, 0], [1, .5], [.7, 1], [0, 1], [.3, .5]], blob: [[.1, .2], [.55, 0], [1, .15], [.9, .8], [.45, 1], [0, .7]],
+  leaf: [[0, 1], [.05, .45], [.3, .12], [1, 0], [.92, .6], [.55, .92]],
+};
+const COLOR_RE = /^#[0-9a-f]{6}([0-9a-f]{2})?$/i;
+function parseGradient(s) {
+  if (!s) return null;
+  const p = s.split(':');
+  if ((p[0] !== 'linear' && p[0] !== 'radial') || p.length < 4) return null;
+  const angle = Number(p[1]), colors = p.slice(2);
+  if (!Number.isFinite(angle) || colors.length < 2 || colors.length > 8 || !colors.every(x => COLOR_RE.test(x))) return null;
+  return { type: p[0], angle, colors };
+}
+function parseStripe(s) {
+  if (!s) return null;
+  const p = s.split(':');
+  if (p.length !== 3) return null;
+  const angle = Number(p[0]), size = Number(p[1]);
+  if (!Number.isFinite(angle) || !Number.isFinite(size) || size < 2 || size > 200 || !COLOR_RE.test(p[2])) return null;
+  return { angle, size, color: p[2] };
+}
+function pathRounded(c, i) {   // 사각형 / 타원 / 둥근 사각형 / 다각형
   c.beginPath();
-  if (i.type === 'ellipse') c.ellipse(i.w / 2, i.h / 2, i.w / 2, i.h / 2, 0, 0, Math.PI * 2);
+  const pts = i.shapeKind ? SHAPE_POINTS[i.shapeKind] : null;
+  if (pts) { pts.forEach(([x, y], n) => n ? c.lineTo(x * i.w, y * i.h) : c.moveTo(x * i.w, y * i.h)); c.closePath(); }
+  else if (i.type === 'ellipse') c.ellipse(i.w / 2, i.h / 2, i.w / 2, i.h / 2, 0, 0, Math.PI * 2);
+  else if (i.radius > 0) c.roundRect(0, 0, i.w, i.h, Math.min(i.radius, i.w / 2, i.h / 2));
   else c.rect(0, 0, i.w, i.h);
+}
+function shapePaint(c, i) {
+  const g = parseGradient(i.gradient);
+  if (!g) return i.fill;
+  let grad;
+  if (g.type === 'radial') grad = c.createRadialGradient(i.w / 2, i.h / 2, 0, i.w / 2, i.h / 2, Math.max(i.w, i.h) / 2);
+  else {
+    const a = g.angle * Math.PI / 180, dx = Math.sin(a), dy = -Math.cos(a), len = Math.abs(i.w * dx) + Math.abs(i.h * dy);
+    grad = c.createLinearGradient(i.w / 2 - dx * len / 2, i.h / 2 - dy * len / 2, i.w / 2 + dx * len / 2, i.h / 2 + dy * len / 2);
+  }
+  g.colors.forEach((col, n) => grad.addColorStop(n / (g.colors.length - 1), col));
+  return grad;
+}
+function drawShape(c, i) {
+  c.save();
+  if (i.shadow) { c.shadowColor = i.shadowColor; c.shadowBlur = i.shadowBlur; }
+  pathRounded(c, i); c.fillStyle = shapePaint(c, i); c.fill();
+  c.restore();
+  const st = parseStripe(i.stripe);
+  if (st) {
+    c.save(); pathRounded(c, i); c.clip();
+    const d = Math.hypot(i.w, i.h);
+    c.translate(i.w / 2, i.h / 2); c.rotate((st.angle - 90) * Math.PI / 180); c.fillStyle = st.color;
+    for (let x = -d, n = 0; x < d && n < 600; x += st.size * 2, n++) c.fillRect(x, -d, st.size, d * 2);
+    c.restore();
+  }
+  if (i.strokeWidth > 0) { pathRounded(c, i); c.lineWidth = i.strokeWidth; c.strokeStyle = i.stroke; c.stroke(); }
 }
 
 // crawl/roll 텍스트: 매 프레임 글자를 통째로 다시 그리는 대신, 내용이 안 바뀌는 동안은
@@ -324,12 +384,7 @@ function drawItem(c, item, time, page) {
     const im = imageFor(item.src);
     if (im) c.drawImage(im, 0, 0, item.w, item.h);
   } else {   // rect, ellipse
-    c.save();
-    if (item.shadow) { c.shadowColor = item.shadowColor; c.shadowBlur = item.shadowBlur; }
-    pathRounded(c, item);
-    c.fillStyle = item.fill; c.fill();
-    c.restore();
-    if (item.strokeWidth > 0) { pathRounded(c, item); c.lineWidth = item.strokeWidth; c.strokeStyle = item.stroke; c.stroke(); }
+    drawShape(c, item);
   }
   c.restore();
   if (v.fold) {

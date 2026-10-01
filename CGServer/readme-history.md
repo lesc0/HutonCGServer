@@ -722,3 +722,30 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
 - 미리보기(처음부터 재생) 단축키를 F5 에서 **Ctrl+F5**(Mac 은 Cmd+F5)로 변경(`page.tsx` 키 핸들러 + 단축키 도움말 모달 문구). 처음엔 Shift+F5 로 바꿨다가 요청으로 Ctrl+F5 로 재변경.
 - 단독 F5 는 앱이 가로채지 않아 브라우저 기본 동작(새로고침)이 됨. Ctrl+F5 는 브라우저의 강제 새로고침 단축키이지만 `preventDefault()` 로 막아 미리보기만 실행됨
   (입력창/텍스트 편집 중에는 핸들러가 무시되므로 그때는 브라우저 강제 새로고침이 동작).
+
+### Run Setting 안내 문구 → 도움말로 이동
+- Run Setting 탭 하단의 "Manual은 페이지 끝에서 멈춥니다. Skip으로 다음 페이지를 선택한 뒤 In을 누르세요." 문구를 삭제.
+- 도움말 모달에는 "Manual은 페이지 끝에서 멈춥니다." 한 문장만 추가(Effects 안내 문단 뒤). Skip/In 사용 안내는 도움말에 넣지 않음.
+
+### Style Catalog 견본 확장 (Color / Shape)
+- **Color 탭**: 24색 → 약 150색(`page.tsx`의 `catalogColors`, 기존 `palettes`를 앞에 두고 중복 제거 후 이어 붙임). 참고 화면(Chyron 계열 Color 목록)의 초록/노랑/주황/빨강/분홍/보라/파랑/청록/갈색/어두운 계열 단색을 옮김.
+  `palettes`는 Char/Shape 견본과 오른쪽 Color 창 팔레트도 쓰므로 건드리지 않고 Color 탭 전용 목록을 분리. 그리드 열 수 3열(넓은 화면 4열) → 6열(1650px↑ 8열).
+- **Shape 탭**: 8개 → 약 130개(`catalogShapes`). 지금 모델이 `rect`/`ellipse`(색·테두리·투명도·그림자)만 지원해서 그걸로 만들 수 있는 것만 추가:
+  굵은 띠(700×80)·중간 띠(28)·가는 선(6)·반투명 선(3), 원(300×300), 정사각/세로 사각형, 반투명, 흰 윤곽선, 글로우(그림자), 드롭섀도 변형 × 16색.
+  견본 미리보기도 가로세로 비율·투명도·테두리·글로우를 반영하도록 개선(이전엔 항상 12px 막대).
+- **도형 모델 확장 (그라데이션/줄무늬/둥근 사각형/테두리만/다각형)**: Item 에 선택 필드 4개 추가(`model.ts` `make()` 기본값 포함 → 저장/불러오기 때 보존, 기존 프로젝트는 기본값이라 영향 없음).
+  - `radius`(모서리 반경, rect) · `shapeKind`(다각형 이름: triangle/wedge/quarter/parallelogram/trapezoid/slant/diamond/pentagon/hexagon/chevron/blob/leaf)
+  - `gradient`: `linear:<각도>:<색1>:<색2>[:<색3>…]` 또는 `radial:0:<중심색>:<바깥색>`(각도는 CSS 와 같음: 0=위, 90=오른쪽, 180=아래; 색은 `#rrggbb[aa]` 만 허용)
+  - `stripe`: `<각도>:<굵기px>:<색>` — 단색/그라데이션 위에 덧그리는 줄무늬
+  - Framed Box 는 별도 필드 없이 `fill:'#00000000'`(투명)+`stroke`. 투명 채우기가 불러올 때 흰색으로 바뀌지 않도록 `normalizeProject`의 fill 검증을 8자리(#rrggbbaa)까지 허용.
+  - 공용 그리기 코드 `app/shapes.ts`(`shapePath`/`drawShape`/`shapeCss`)를 만들어 에디터 캔버스(`editor-canvas.tsx`의 rect/ellipse 분기를 Shape 하나로 교체, 히트 영역도 같은 경로)와 썸네일/카탈로그 미리보기가 같이 씀.
+  - **송출 쪽 `bin/web/cg-runtime.js`에도 같은 로직 이식**(`ITEM_DEFAULTS` 기본값, `SHAPE_POINTS`/`parseGradient`/`parseStripe`/`pathRounded`/`drawShape`). **shapes.ts 와 cg-runtime.js 는 한쪽을 고치면 다른 쪽도 같이 고칠 것.**
+  - 헤드리스 Chromium 에서 런타임 코드로 둥근 사각형·원 그라데이션·줄무늬·테두리만·다각형(wedge/quarter/hexagon/chevron)·글로우가 그려지는 것 확인.
+- **카탈로그**: Color 탭 끝에 그라데이션/줄무늬 견본 약 80개(위→아래·대각선·방사형·줄무늬·금속·가로 3색 등; 클릭하면 `fill`(대체 단색)+`gradient`+`stripe` 적용, 단색 견본을 누르면 gradient/stripe 초기화).
+  Shape 탭은 Rounded Rect/Framed Box/그라데이션 막대·원/글로우/줄무늬 및 Custom 다각형 12종 × 단색·그라데이션 견본 추가(총 약 400개), 라벨도 Box/Circle/Rounded Rect/Framed Box/Custom 으로 표시.
+- **한계**: 텍스트 객체는 `fill` 단색만 그리므로 그라데이션 견본을 텍스트에 누르면 대체 단색만 적용됨. Attributes 창에 radius/gradient/stripe/shapeKind 편집 UI 는 아직 없음(카탈로그로만 지정). 사각형 모서리 반경 외의 곡선 도형(Custom 곡선)은 다각형 근사.
+
+### Attributes 창에 도형 편집 칸 추가
+- rect/ellipse 선택 시 Attributes 탭 가운데 열 아래에 **Shape** 블록 표시(`attributes.tsx`의 `ShapeProps`): Radius(사각형, 다각형이 아닐 때) · Shape(None/다각형 12종) ·
+  Gradient(None/Linear/Radial, Linear 각도, 색 2~3개 + 추가/제거 버튼) · Stripe(체크, 각도·굵기·Alpha %·색). 값은 `gradient`/`stripe` 문자열로 다시 조합해 저장(알파 있는 색은 알파 유지).
+- 주의: 그라데이션이 켜져 있으면 `fill`(오른쪽 Color 창의 F)을 바꿔도 그라데이션이 우선이라 보이지 않음 → Gradient 를 None 으로 끄거나 Shape 블록의 색을 바꿔야 함.
