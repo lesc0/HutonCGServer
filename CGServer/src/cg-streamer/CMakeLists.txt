@@ -54,7 +54,9 @@ target_include_directories(cg_streamer PRIVATE ${X11_INCLUDE_DIR} ${CG_ROOT}/inc
 # 실행 파일은 bin/ 에 만든다. CEF 런타임 파일(libcef.so, pak, icudtl 등)도 그 옆으로 복사.
 # 웹 리소스(player.html, cg-runtime.js, 프로젝트별 폴더)는 bin/web/ 에 있으므로 복사하지 않는다
 # (실행 파일 옆 web/ 을 그대로 사용).
-set(CEF_TARGET_OUT_DIR ${CG_ROOT}/bin)
+# build.sh 는 CG_OUT_DIR 을 빌드 폴더 안으로 지정해 debug/release 가 bin/ 을 덮어쓰지 않게 하고, install 때 bin/ 으로 복사한다.
+set(CG_OUT_DIR ${CG_ROOT}/bin CACHE PATH "cg-streamer 와 CEF 런타임 파일을 만들 폴더")
+set(CEF_TARGET_OUT_DIR ${CG_OUT_DIR})
 set_target_properties(cg_streamer PROPERTIES OUTPUT_NAME cg-streamer RUNTIME_OUTPUT_DIRECTORY ${CEF_TARGET_OUT_DIR})   # 실행 파일: bin/cg-streamer
 COPY_FILES(cg_streamer "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${CEF_TARGET_OUT_DIR}")
 COPY_FILES(cg_streamer "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${CEF_TARGET_OUT_DIR}")
