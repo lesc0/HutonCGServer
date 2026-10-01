@@ -40,7 +40,6 @@ export function useStreamControl(onError: (s: string) => void) {
   </div>
   <label>Go to page<input type="number" min={1} max={status?.pages||9999} value={gotoPage} onChange={e=>setGotoPage(Math.max(1,Math.round(+e.target.value)))}/><button disabled={busy} onClick={()=>send('goto',gotoPage)}>Go</button></label>
   <button className="danger" disabled={busy} onClick={()=>{if(window.confirm('Quit the streaming engine (cg-streamer)?'))send('quit')}}>Quit engine</button>
-  <p className="muted">Start cg-streamer first with a project saved in bin/project (e.g. ./cg-streamer --run --project=... --udp=host:port). This panel only controls an engine that is already running. After editing, click "Save project", then "Reload saved project" above for the change to reach the output (it is not applied automatically). To replace the whole project, pick one above and click "Switch project".</p>
  </div>;
  return {panel,online,status};
 }
