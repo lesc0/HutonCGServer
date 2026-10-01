@@ -20,6 +20,7 @@ export function useStreamControl(onError: (s: string) => void) {
    <>{status.project} · Page {status.page}/{status.pages} · {status.playing?'Playing':'Stopped'} · {(status.time||0).toFixed(1)}s</>}</div>
   <button className="primary" disabled={busy||!online} onClick={reload}>Reload saved project</button>
   <div className="stream-switch">
+   <span className="stream-label">Output Project:</span>
    <select aria-label="Project to switch to" disabled={busy||!projects.length} value={selected} onChange={e=>setSelected(e.target.value)}>
     {!projects.length&&<option value="">No projects saved in bin/project</option>}
     {projects.map(p=><option key={p.name} value={p.name}>{p.name}</option>)}

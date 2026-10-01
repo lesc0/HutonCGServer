@@ -707,3 +707,18 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
 ### 참고: Text Link
 - Attributes 창의 Text Link = 선택한 텍스트 객체를 외부 `.txt` 와 연결. File System Access API 지원 브라우저는 2초마다 파일 변경을 감지해 자동 반영,
   미지원 브라우저는 선택 시점 1회만 읽음. 연결된 객체는 직접 편집 불가, `linkName`으로 cg-streamer `PUT /text/<linkName>` 갱신과도 연결됨.
+
+### 재생 패널 탭 변경 (Timeline / Playback 창)
+- 'Stream Control' 탭 이름을 **'Output Stream Control'**로 변경(`page.tsx`의 `playTab` 값과 탭 목록).
+- 'Stamp Playback'·'Global Animation Playback' 탭은 **삭제하지 않고 탭 목록에서만 숨김**. 관련 코드(`channels.tsx`의 `aux.controls`, `page.tsx`의 분기)는 그대로 남아 있어서,
+  다시 보이게 하려면 `page.tsx`의 탭 배열(`['Output Stream Control','Timeline','Playback','Run Setting', ...]`)에 두 이름을 되돌려 넣으면 됨(주석에 표시해 둠).
+- 탭 순서: Output Stream Control · Timeline · Playback · Run Setting. 기본 선택 탭은 그대로 Timeline.
+
+### Output Stream Control 에 "Output Project:" 라벨 추가
+- 프로젝트 선택 콤보박스 **왼쪽**에 `Output Project:` 라벨 추가(`stream-control.tsx`, `.stream-label`). 처음엔 상태 표시줄의 프로젝트 이름 앞에 넣었다가
+  요청으로 콤보 왼쪽으로 이동했고 상태 표시줄은 원래대로(`자막프로젝트 · Page 1/3 · …`).
+
+### 단축키 변경: F5 → Ctrl+F5 (미리보기)
+- 미리보기(처음부터 재생) 단축키를 F5 에서 **Ctrl+F5**(Mac 은 Cmd+F5)로 변경(`page.tsx` 키 핸들러 + 단축키 도움말 모달 문구). 처음엔 Shift+F5 로 바꿨다가 요청으로 Ctrl+F5 로 재변경.
+- 단독 F5 는 앱이 가로채지 않아 브라우저 기본 동작(새로고침)이 됨. Ctrl+F5 는 브라우저의 강제 새로고침 단축키이지만 `preventDefault()` 로 막아 미리보기만 실행됨
+  (입력창/텍스트 편집 중에는 핸들러가 무시되므로 그때는 브라우저 강제 새로고침이 동작).
