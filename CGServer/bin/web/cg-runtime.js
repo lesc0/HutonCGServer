@@ -361,7 +361,9 @@ async function reloadProject() {
   project = next;
   stamps = [idleChannel(), idleChannel()];
   globalCh = idleChannel();
-  nativeVideo.key = '';
+  // nativeVideo.key 는 건드리지 않는다: syncVideo() 가 이전 값과 비교해서 네이티브 영상을 끄므로,
+  // 여기서 미리 ''로 리셋해버리면 새 프로젝트도 영상이 없을 때 "변화 없음"으로 오판해 video:stop 이 안 나가고
+  // 이전 프로젝트의 네이티브 비디오 디코더가 그대로 켜진 채 남는다(비트레이트/CPU 이상의 원인이었음).
   const srcs = new Set();
   for (const p of project.pages) for (const i of p.items) if (i.type === 'image' && i.src) srcs.add(i.src);
   for (const s of srcs) imageFor(s);

@@ -564,3 +564,15 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
   `tsc --noEmit` 통과.
 - 남은 일: `main.cpp`/`cg-runtime.js` C++·JS 변경은 재빌드·재시작해야 반영됨(핫리로드 대상 아님) — 수정할 때마다 `cg-streamer` 재시작 필요한 걸 계속 깜빡해서
   디버깅이 늘어졌음, 다음엔 변경 직후 바로 재시작·재검증 습관화.
+
+### cg-streamer: reload 후 네이티브 영상이 눌러붙는 버그 수정
+- 증상: 영상이 있는 페이지(예: `자막프로젝트.json` 2페이지의 `girsday.mp4`)를 거쳐 reload/switch 한 뒤에는, 영상이 없는 페이지/프로젝트로 돌아가도
+  `[stat]` 로그의 `video=on`이 계속 남고 `under`(프레임 반복 카운터)가 멈춘 채 고정됨 → 비트레이트·CPU 이상, "송출이 안 되는 것 같다"로 체감.
+- 원인: `reloadProject()`(`bin/web/cg-runtime.js`)가 `nativeVideo.key`를 미리 `''`로 리셋해뒀음. 매 프레임 도는 `syncVideo()`는 "이전 키와 다르면
+  video:stop/play 를 보낸다" 는 비교로 동작하는데, 새 프로젝트도 영상이 없으면 desired 영상 키가 똑같이 `''`가 되어 "변화 없음"으로 오판 → 이전 프로젝트의
+  네이티브 MPP 비디오 디코더를 끄는 `video:stop` 이 안 나가고 그대로 눌러붙음.
+- 수정: `reloadProject()`에서 `nativeVideo.key` 리셋 줄 제거 — `syncVideo()`의 자연스러운 비교에 맡김.
+- 확인: cg-streamer 재시작 후 영상 있는 페이지(2) → 영상 없는 프로젝트("가로스크롤-예제")로 전환 → `[stat]` 로그가 `video=on`에서 `video=off`로 정상
+  전환되고 `under` 카운터도 다시 정상적으로 증가하는 것 확인.
+- 참고(답변): 프로젝트의 `"video"` 아이템은 CEF `<video>` 태그가 아니라 네이티브 MPP 디코딩(`video_source.cpp`) + RGA 합성 경로를 씀
+  (`cg-runtime.js` 는 video 타입을 캔버스에 그리지 않고 건너뜀). 이번에 적용한 CEF rkmpp(`<video>` 태그용 V4L2 패치)는 이 경로와 무관 — 이 기능은 패치 없이도 그대로 동작.
