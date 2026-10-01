@@ -1,6 +1,6 @@
 // 메인 메뉴(펼침) 항목별 아이콘. 항목 이름(label)으로 찾고, 없으면 아이콘 자리만 비워 정렬을 맞춘다.
 import type {ComponentType} from 'react';
-import {FilePlus,FilePlus2,FolderOpen,Save,SaveAll,ImageDown,Undo2,Redo2,Copy,ClipboardPaste,Scissors,Trash2,BoxSelect,Scan,Group,Ungroup,Frame,Grid2X2,Magnet,Maximize,Play,Type,Square,Circle,ImagePlus,Film,Music,Clock,Timer,Lock,LockOpen,Link,RotateCcw,ExternalLink,HelpCircle} from 'lucide-react';
+import {FilePlus,FilePlus2,FolderOpen,Save,SaveAll,ImageDown,Undo2,Redo2,Copy,ClipboardPaste,Scissors,Trash2,BoxSelect,Scan,Group,Ungroup,Frame,Grid2X2,Magnet,Maximize,Play,Type,Square,Circle,ImagePlus,Film,Cast,Music,Clock,Timer,Lock,LockOpen,Link,RotateCcw,ExternalLink,HelpCircle} from 'lucide-react';
 
 type Icon=ComponentType<{size?:number;strokeWidth?:number}>;
 const icons:Record<string,Icon>={
@@ -11,7 +11,7 @@ const icons:Record<string,Icon>={
   // 보기
   'Safe Area':Frame,'Grid':Grid2X2,'Snap':Magnet,'화면 맞춤':Maximize,'미리보기':Play,
   // 삽입
-  '새 페이지':FilePlus2,'문자':Type,'사각형':Square,'원':Circle,'이미지':ImagePlus,'동영상':Film,'음성':Music,'시계':Clock,'계수기':Timer,
+  '새 페이지':FilePlus2,'문자':Type,'사각형':Square,'원':Circle,'이미지':ImagePlus,'동영상':Film,'HDMI 입력(라이브)':Cast,'음성':Music,'시계':Clock,'계수기':Timer,
   // 도구
   '객체 잠금':Lock,'객체 락 모두 해제':LockOpen,'Text Link':Link,
   // 창 / 도움말

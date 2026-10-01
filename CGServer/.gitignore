@@ -2,6 +2,8 @@ build/
 bin/*
 !bin/web/
 !bin/cgctl.sh
+!bin/start.sh
+!bin/stop.sh
 !bin/media/
 bin/media/*
 !bin/media/.gitkeep

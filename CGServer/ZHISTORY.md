@@ -576,3 +576,34 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
   전환되고 `under` 카운터도 다시 정상적으로 증가하는 것 확인.
 - 참고(답변): 프로젝트의 `"video"` 아이템은 CEF `<video>` 태그가 아니라 네이티브 MPP 디코딩(`video_source.cpp`) + RGA 합성 경로를 씀
   (`cg-runtime.js` 는 video 타입을 캔버스에 그리지 않고 건너뜀). 이번에 적용한 CEF rkmpp(`<video>` 태그용 V4L2 패치)는 이 경로와 무관 — 이 기능은 패치 없이도 그대로 동작.
+
+### --accel(OnAcceleratedPaint dmabuf) 실기 테스트 — 동작 안 함, 원복
+- `rk3588-accel` 프리셋(`ENABLE_ACCEL_PAINT=ON`)으로 재빌드 후 `--accel --out=test.ts --seconds=10`로 테스트.
+- 결과: GPU 프로세스가 초기화 단계에서 죽음(`libGL error: failed to load driver: rockchip` → `Exiting GPU process due to errors during initialization`).
+  accel 경로는 GPU 텍스처 공유가 필수라 GPU 프로세스가 없으면 아예 동작 불가 — `test.ts` 0바이트(프레임 한 개도 안 나옴).
+  (OnPaint 소프트웨어 경로는 이 GPU 실패와 무관하게 정상 동작 — 지금까지 써온 기본 경로는 영향 없음.)
+- 원복: `bin/cg-streamer`가 다른 빌드 디렉터리(`build/rk3588-accel`)에 의해 덮어써진 상태라 `build/rk3588`가 "no work to do"로 재빌드를 건너뜀 →
+  `bin/cg-streamer` 를 직접 지우고 `rk3588`(비-accel) 프리셋으로 강제 재링크, `--accel` 플래그를 줘도 OnPaint 로 폴백하는 것까지 확인.
+- 결론: 이 보드/환경에서는 Mesa rockchip DRI 드라이버가 없어서 `--accel`을 못 씀. 정식 지원하려면 별도 드라이버 설치/설정 필요(미조사).
+
+### [cg-editor] HDMI 입력(라이브) 오브젝트, 화면 전체 크기 맞춤
+- HDMI RX 라이브 테스트용으로 프로젝트에 `src:"hdmirx"`인 video 아이템을 넣는 UI가 없었음(기존 "동영상"은 `bin/media` 파일만 선택 가능) → 추가:
+  - `app/page.tsx` `addHdmiVideo()`: 파일 선택 없이 바로 전체화면(1920×1080) video 아이템 생성. 삽입 메뉴·툴바(Cast 아이콘)에 배치.
+  - `app/model.ts` `normalizeProject`: src 검증 정규식이 `hdmirx`/`/dev/videoN`을 "unsupported media"로 거부하던 것 수정(저장 후 재오픈 시 사라지는 것 방지).
+  - `app/editor-canvas.tsx`: 디자인 캔버스에서 hdmirx 아이템은 실제 로드를 시도하지 않고 "HDMI 입력 (라이브)" 플레이스홀더로 표시(실제 재생은 cg-streamer 에서만 확인 가능).
+- 테스트 중 위치가 살짝 밀려(x=-5,y=-9) RGA가 매 프레임 "Illegal dst rect"(좌표 음수) 에러를 내며 합성 실패 → 화면엔 "처음엔 나오고 그 다음부터 안 보임"으로 체감.
+  위치를 0,0,1920×1080으로 되돌리고 `reload`로 확인(에러 사라짐).
+- 재발 방지로 **"화면 전체 크기로"** 기능 추가(`fitFullscreen`, 툴바 Maximize2 아이콘 + 우클릭 메뉴): 선택한 오브젝트를 정확히 x:0,y:0,w:1920,h:1080 으로 맞춤.
+- HDMI RX 자체(`hdmirx_source.cpp`)는 로그상 재연결이 여러 번 정상적으로 성공(`stop`→`start`→`signal 3840x2160 59.94fps`)했지만, 한 번은 신호를 잡자마자 바로
+  꺼지고 이후 페이지에 계속 있었는데도 재연결이 안 된 경우를 로그에서 발견 — 원인 미해결, 재현 시 추가 조사 필요(네이티브→JS로 연결 끊김이 전달 안 돼서
+  `syncVideo()` 의 키 비교가 재연결을 트리거 못 하는 경로가 있을 가능성).
+
+### 로그 정리, 보드 디스플레이(HDMI 출력) 확인, 키오스크 스크립트
+- `bin/log/` 폴더 신설, 테스트하며 쌓인 `.stream*.log` 찌꺼기 정리. `bin/*`가 이미 `.gitignore`라 `bin/log/`는 별도 설정 없이 자동 제외됨.
+- 보드에 HDMI 출력 포트가 2개(물리 라벨 "1"/"2") 있는데, DRM 커넥터명(`card0-HDMI-A-1`/`-2`)과 실제 매핑이 케이블 연결마다 바뀌는 것처럼 보임(원인 미확인 —
+  재현 조건 불명확). 모니터가 1대뿐이라 "editor/송출 분리 출력"은 지금은 확인 불가, 모니터 2대 연결 시 재확인 필요.
+  해상도가 800x600으로 낮게 고정돼 있던 것은 `xrandr --output <출력> --mode <최대모드>`로 수정(이 모니터는 1920×1080 지원 안 함, 최대 1368×768).
+- `cg-streamer` 자체는 런타임에 `/opt` 가 필요 없음(빌드 시 `bin/`에 CEF 런타임 파일을 전부 복사해 두고, RPATH도 `.` 를 `/opt/...` 보다 먼저 찾음 —
+  `/opt/cef/...`는 재빌드할 때(`CEF_ROOT`)와 `bin/libcef.so`가 없어졌을 때의 폴백 용도). `/opt/chromium.org/...`는 별개로 키오스크용 보드 시스템 브라우저.
+- `bin/start.sh`/`bin/stop.sh` 신설: cg-editor + cg-streamer(UDP 송출, 로컬 미리보기 없음) + Chromium 키오스크(cg-editor 화면)를 한 번에 올리고 내림.
+  `CG_PROJECT`/`CG_UDP`/`CG_EDITOR_PORT` 환경변수로 기본값(자막프로젝트, 10.10.10.18:1234, 5173) 변경 가능. `.gitignore`에 `!bin/start.sh`/`!bin/stop.sh` 추가.
