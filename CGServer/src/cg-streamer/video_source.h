@@ -15,12 +15,15 @@ struct VideoFrameRef {   // Acquire()~Release() 동안만 유효
   int format = 0;        // RK_FORMAT_* (0 = NV12)
 };
 
+class AudioMixer;
+
 class VideoSource {
  public:
   ~VideoSource() { Stop(); }
   bool Play(const std::string& path, bool loop = true);   // 이미 재생 중이면 교체
   void Stop();
   bool Active() const { return running_; }
+  void SetAudio(AudioMixer* a) { audio_ = a; }   // 영상의 음성 트랙을 보낼 믹서 (없으면 무음)
 
   // 합성 스레드: 현재 프레임 사용 시작/끝 (그 사이에는 디코더가 프레임을 바꾸지 않음)
   bool Acquire(VideoFrameRef& out);
@@ -30,6 +33,7 @@ class VideoSource {
   void Run(std::string path, bool loop);
   void Publish(MppFrame f);
 
+  AudioMixer* audio_ = nullptr;
   std::thread th_;
   std::atomic<bool> running_{false}, stop_{false};
   std::mutex mu_;

@@ -5,11 +5,15 @@
 #include <chrono>
 #include <cstdio>
 #include <functional>
+#include <vector>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libswresample/swresample.h>
 }
+
+#include "audio_mixer.h"
 
 using clk = std::chrono::steady_clock;
 
@@ -25,6 +29,7 @@ void VideoSource::Stop() {
   stop_ = true;
   if (th_.joinable()) th_.join();
   running_ = false;
+  if (audio_) audio_->Clear();   // 아직 재생 안 된 음성 폐기
   std::lock_guard<std::mutex> lk(mu_);
   if (cur_) mpp_frame_deinit(&cur_);
   if (grp_) { mpp_buffer_group_put(grp_); grp_ = nullptr; }   // 프레임을 모두 놓은 뒤 그룹 해제
@@ -84,6 +89,30 @@ void VideoSource::Run(std::string path, bool loop) {
     bsf->time_base_in = st->time_base;
     av_bsf_init(bsf);
   }
+  // 음성 트랙: 디코드 -> 48kHz 스테레오 float -> 믹서 (영상 시각 t0 기준으로 배치)
+  AVCodecContext* adec = nullptr;
+  SwrContext* swr = nullptr;
+  AVStream* ast = nullptr;
+  int asi = -1;
+  if (audio_ && (asi = av_find_best_stream(fc, AVMEDIA_TYPE_AUDIO, -1, si, nullptr, 0)) >= 0) {
+    ast = fc->streams[asi];
+    const AVCodec* ac = avcodec_find_decoder(ast->codecpar->codec_id);
+    adec = ac ? avcodec_alloc_context3(ac) : nullptr;
+    bool aok = adec && avcodec_parameters_to_context(adec, ast->codecpar) >= 0 && avcodec_open2(adec, ac, nullptr) >= 0;
+    if (aok) {
+      const uint64_t in_l = adec->channel_layout ? adec->channel_layout : av_get_default_channel_layout(adec->channels);
+      aok = (swr = swr_alloc_set_opts(nullptr, AV_CH_LAYOUT_STEREO, AV_SAMPLE_FMT_FLT, AudioMixer::kRate, in_l,
+                                      adec->sample_fmt, adec->sample_rate, 0, nullptr)) &&
+            swr_init(swr) >= 0;
+    }
+    if (!aok) {
+      fail("음성 디코더 초기화 실패(음성 없이 재생)");
+      swr_free(&swr);
+      avcodec_free_context(&adec);
+      asi = -1;
+    }
+  }
+
   double fps = av_q2d(st->avg_frame_rate);
   if (!(fps > 0 && fps < 240)) fps = av_q2d(st->r_frame_rate);
   if (!(fps > 0 && fps < 240)) fps = 30;
@@ -99,6 +128,42 @@ void VideoSource::Run(std::string path, bool loop) {
 
   auto t0 = clk::now();
   uint64_t shown = 0;
+  uint64_t vpkts = 0;   // MPP 에 넣은 영상 패킷 수 (= 이 패킷의 표시 순번)
+
+  // 음성 배치: 반복 재생 때마다 "그 회차 첫 영상 프레임의 표시 시각"에서 이어 붙여 영상과 어긋남이 쌓이지 않게 한다.
+  // 첫 프레임이 표시되기 전(t0 미확정)에 읽은 음성은 모아 두었다가 t0 가 정해지면 보낸다.
+  struct APend { std::vector<float> pcm; double rel; };   // rel: t0 기준 재생 시각(초)
+  std::vector<APend> apend;
+  uint64_t a_anchor_v = 0;   // 현재 회차 시작 영상 순번
+  int64_t a_samples = 0;     // 현재 회차에서 지금까지 만든 음성 샘플 수
+  double a_off = 0;          // 음성 시작이 영상보다 늦은/빠른 정도(초) - 첫 회차만 의미 있음
+  if (ast && st->start_time != AV_NOPTS_VALUE && ast->start_time != AV_NOPTS_VALUE)
+    a_off = ast->start_time * av_q2d(ast->time_base) - st->start_time * av_q2d(st->time_base);
+  auto flush_audio = [&]() {
+    if (shown == 0) return;
+    for (auto& a : apend) {
+      const auto due = t0 + std::chrono::duration_cast<clk::duration>(std::chrono::duration<double>(a.rel));
+      audio_->PushAt(a.pcm.data(), (int)(a.pcm.size() / 2), due);
+    }
+    apend.clear();
+  };
+  auto handle_audio = [&](AVPacket* p) {
+    if (avcodec_send_packet(adec, p) < 0) return;
+    AVFrame* af = av_frame_alloc();
+    while (avcodec_receive_frame(adec, af) == 0) {
+      const int cap = swr_get_out_samples(swr, af->nb_samples);
+      std::vector<float> pcm((size_t)std::max(cap, 0) * 2);
+      uint8_t* o = (uint8_t*)pcm.data();
+      const int got = swr_convert(swr, &o, cap, (const uint8_t**)af->extended_data, af->nb_samples);
+      if (got <= 0) continue;
+      pcm.resize((size_t)got * 2);
+      const double rel = a_anchor_v / fps + a_off + (double)a_samples / AudioMixer::kRate;
+      a_samples += got;
+      apend.push_back({std::move(pcm), rel});
+    }
+    av_frame_free(&af);
+    flush_audio();
+  };
 
   // 디코더 출력 프레임 1개 처리. 원본 fps 에 맞춰 대기 후 현재 프레임으로 교체.
   auto handle_frame = [&](MppFrame f) {
@@ -128,6 +193,7 @@ void VideoSource::Run(std::string path, bool loop) {
     std::this_thread::sleep_until(due);
     Publish(f);
     shown++;
+    if (shown == 1 && audio_) flush_audio();
   };
   auto drain_one = [&]() -> bool {
     MppFrame f = nullptr;
@@ -143,6 +209,7 @@ void VideoSource::Run(std::string path, bool loop) {
       if (!drain_one()) std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     mpp_packet_deinit(&mp);
+    vpkts++;
   };
 
   pkt = av_packet_alloc();
@@ -154,6 +221,12 @@ void VideoSource::Run(std::string path, bool loop) {
       if (loop) {   // 처음부터 다시 (디코더 상태는 유지, IDR 부터 이어짐)
         av_seek_frame(fc, si, 0, AVSEEK_FLAG_BACKWARD);
         if (bsf) av_bsf_flush(bsf);
+        if (adec) {
+          avcodec_flush_buffers(adec);
+          a_anchor_v = vpkts;
+          a_samples = 0;
+          a_off = 0;
+        }
         eof = false;
       } else {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -161,18 +234,28 @@ void VideoSource::Run(std::string path, bool loop) {
       }
       continue;
     }
-    if (av_read_frame(fc, pkt) < 0) { eof = true; continue; }
-    if (pkt->stream_index != si) { av_packet_unref(pkt); continue; }
-    if (bsf) {
-      if (av_bsf_send_packet(bsf, pkt) < 0) { av_packet_unref(pkt); continue; }
-      while (av_bsf_receive_packet(bsf, pkt) == 0) { put(pkt); av_packet_unref(pkt); }
-    } else {
-      put(pkt);
+    // 영상 패킷 1개를 넣을 때까지 읽는다 (사이사이의 음성 패킷은 바로 처리해 음성이 밀리지 않게 함)
+    bool got_video = false;
+    while (!stop_ && !got_video) {
+      if (av_read_frame(fc, pkt) < 0) { eof = true; break; }
+      if (pkt->stream_index == asi && adec) {
+        handle_audio(pkt);
+      } else if (pkt->stream_index == si) {
+        if (bsf) {
+          if (av_bsf_send_packet(bsf, pkt) >= 0)
+            while (av_bsf_receive_packet(bsf, pkt) == 0) { put(pkt); av_packet_unref(pkt); }
+        } else {
+          put(pkt);
+        }
+        got_video = true;
+      }
       av_packet_unref(pkt);
     }
   }
 
   av_packet_free(&pkt);
+  swr_free(&swr);
+  avcodec_free_context(&adec);
   if (bsf) av_bsf_free(&bsf);
   avformat_close_input(&fc);
   mpi->reset(ctx);

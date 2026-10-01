@@ -65,6 +65,7 @@
 #include "hdmirx_source.h"
 #include "video_source.h"
 #include "ts_muxer.h"
+#include "audio_mixer.h"
 #include "cef_dumper.h"
 
 // X11 은 CEF 헤더 뒤에 포함(Success/None 등 매크로가 CEF의 동명 심볼과 충돌).
@@ -160,6 +161,7 @@ static std::atomic<uint64_t> g_accel_fail{0};
 
 // 영상 (HTML <video> 대신 네이티브 MPP 디코딩, RGA 로 UI 와 합성)
 static VideoSource g_video;
+static AudioMixer g_audio;                       // 영상/HDMI 음성 -> AAC -> TS (EncodeLoop 이 시작/종료)
 static HdmiRxSource g_hdmi;                      // HDMI 입력 라이브 소스
 static std::mutex g_video_mu;                    // g_video_path / g_video_rect
 static std::string g_video_path;
@@ -496,6 +498,7 @@ static void EncodeLoop(CefRefPtr<Client> client) {
   g_enc_ok = true;
   TsMuxer mux;
   if (!mux.Open(g_out, kW, kH, g_fps)) { g_quit = true; return; }
+  g_audio.Start(&mux);
 
   using clk = std::chrono::steady_clock;
   const auto period = std::chrono::nanoseconds(1000000000LL / g_fps);
@@ -612,6 +615,7 @@ static void EncodeLoop(CefRefPtr<Client> client) {
     }
   }
   g_enc_ok = false;
+  g_audio.Stop();
   mux.Close();
 }
 
@@ -948,6 +952,8 @@ static bool AcquireRunLock() {
 }
 
 int main(int argc, char* argv[]) {
+  g_video.SetAudio(&g_audio);
+  g_hdmi.SetAudio(&g_audio);
   CefMainArgs main_args(argc, argv);
   CefRefPtr<App> app = new App;
 

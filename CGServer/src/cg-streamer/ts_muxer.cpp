@@ -1,9 +1,11 @@
 #include "ts_muxer.h"
 
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/error.h>
 #include <libavutil/mathematics.h>
@@ -47,6 +49,30 @@ bool TsMuxer::Open(const std::string& url, int w, int h, int fps) {
   st_->time_base = AVRational{1, 90000};
   st_->avg_frame_rate = AVRational{fps, 1};
 
+  // 음성: AAC-LC (libavcodec 내장 aac 인코더). 인코더를 먼저 열어 extradata(ADTS 용)를 스트림에 복사한다.
+  const AVCodec* ac = avcodec_find_encoder(AV_CODEC_ID_AAC);
+  if (ac) {
+    aenc_ = avcodec_alloc_context3(ac);
+    aenc_->sample_rate = kAudioRate;
+    aenc_->channel_layout = AV_CH_LAYOUT_STEREO;
+    aenc_->channels = 2;
+    aenc_->sample_fmt = AV_SAMPLE_FMT_FLTP;
+    aenc_->bit_rate = 128000;
+    aenc_->time_base = AVRational{1, kAudioRate};
+    aenc_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;   // mpegts 는 extradata(AudioSpecificConfig)로 ADTS 헤더를 만든다
+    if (avcodec_open2(aenc_, ac, nullptr) >= 0 && (ast_ = avformat_new_stream(fc_, nullptr)) &&
+        avcodec_parameters_from_context(ast_->codecpar, aenc_) >= 0) {
+      ast_->time_base = AVRational{1, 90000};
+    } else {
+      fprintf(stderr, "[ts] AAC 인코더 초기화 실패 - 음성 없이 송출\n");
+      avcodec_free_context(&aenc_);
+      aenc_ = nullptr;
+      ast_ = nullptr;
+    }
+  } else {
+    fprintf(stderr, "[ts] AAC 인코더 없음 - 음성 없이 송출\n");
+  }
+
   if (!(fc_->oformat->flags & AVFMT_NOFILE)) {
     r = avio_open2(&fc_->pb, url.c_str(), AVIO_FLAG_WRITE, nullptr, nullptr);
     if (r < 0) { PrintErr("avio_open", r); return false; }
@@ -79,6 +105,8 @@ bool TsMuxer::Write(const uint8_t* d, size_t len) {
   if (IsIdr(d, len)) pkt->flags |= AV_PKT_FLAG_KEY;
   n_++;
 
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!base_set_) { base_ = std::chrono::steady_clock::now(); base_set_ = true; }
   int r = av_write_frame(fc_, pkt);
   av_packet_free(&pkt);
   if (r < 0) {
@@ -88,12 +116,49 @@ bool TsMuxer::Write(const uint8_t* d, size_t len) {
   return true;
 }
 
+bool TsMuxer::WriteAudio(const float* pcm, std::chrono::steady_clock::time_point block_start) {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!fc_ || !header_ || !aenc_ || !base_set_) return false;   // 영상이 시작되기 전 음성은 버림
+
+  int64_t pts = std::llround(std::chrono::duration<double>(block_start - base_).count() * kAudioRate);
+  if (last_apts_ != INT64_MIN && std::llabs(pts - (last_apts_ + kAudioFrame)) < 480) pts = last_apts_ + kAudioFrame;   // 지터 흡수
+  if (pts < 0) return false;
+  last_apts_ = pts;
+
+  AVFrame* f = av_frame_alloc();
+  f->nb_samples = kAudioFrame;
+  f->format = AV_SAMPLE_FMT_FLTP;
+  f->channel_layout = AV_CH_LAYOUT_STEREO;
+  f->channels = 2;
+  f->sample_rate = kAudioRate;
+  if (av_frame_get_buffer(f, 0) < 0) { av_frame_free(&f); return false; }
+  float* l = (float*)f->data[0];
+  float* r = (float*)f->data[1];
+  for (int i = 0; i < kAudioFrame; i++) { l[i] = pcm[2 * i]; r[i] = pcm[2 * i + 1]; }
+  f->pts = pts;
+
+  bool ok = avcodec_send_frame(aenc_, f) >= 0;
+  av_frame_free(&f);
+  AVPacket* pkt = av_packet_alloc();
+  while (ok && avcodec_receive_packet(aenc_, pkt) == 0) {
+    pkt->stream_index = ast_->index;
+    av_packet_rescale_ts(pkt, aenc_->time_base, ast_->time_base);
+    if (av_write_frame(fc_, pkt) < 0) ok = false;
+    av_packet_unref(pkt);
+  }
+  av_packet_free(&pkt);
+  return ok;
+}
+
 void TsMuxer::Close() {
   if (!fc_) return;
+  std::lock_guard<std::mutex> lk(mu_);
   if (header_) av_write_trailer(fc_);
   if (fc_->pb && !(fc_->oformat->flags & AVFMT_NOFILE)) avio_closep(&fc_->pb);
   avformat_free_context(fc_);
+  if (aenc_) avcodec_free_context(&aenc_);
   fc_ = nullptr;
   st_ = nullptr;
+  ast_ = nullptr;
   header_ = false;
 }

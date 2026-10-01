@@ -21,7 +21,7 @@ add_subdirectory(${CEF_LIBCEF_DLL_WRAPPER_PATH} libcef_dll_wrapper)
 include_directories(${CEF_ROOT})
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswscale)
+pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswscale libswresample)
 find_package(X11 REQUIRED)
 if(NOT X11_Xext_FOUND)
   message(FATAL_ERROR "libXext(-dev) 필요 (MIT-SHM, --preview 용)")
@@ -34,6 +34,7 @@ add_executable(cg_streamer
   main.cpp
   mpp_encoder.cpp
   ts_muxer.cpp
+  audio_mixer.cpp
   video_source.cpp
   hdmirx_source.cpp
   cef_dumper.cpp)
@@ -47,7 +48,7 @@ if(ENABLE_EXTERNAL_BEGIN_FRAME)
 endif()
 SET_EXECUTABLE_TARGET_PROPERTIES(cg_streamer)
 add_dependencies(cg_streamer libcef_dll_wrapper)
-target_link_libraries(cg_streamer libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} rockchip_mpp rga PkgConfig::FFMPEG pthread ${X11_LIBRARIES} ${X11_Xext_LIB})
+target_link_libraries(cg_streamer libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} rockchip_mpp rga PkgConfig::FFMPEG pthread ${CMAKE_DL_LIBS} ${X11_LIBRARIES} ${X11_Xext_LIB})
 target_include_directories(cg_streamer PRIVATE ${X11_INCLUDE_DIR} ${CG_ROOT}/inc)
 
 # 실행 파일은 bin/ 에 만든다. CEF 런타임 파일(libcef.so, pak, icudtl 등)도 그 옆으로 복사.

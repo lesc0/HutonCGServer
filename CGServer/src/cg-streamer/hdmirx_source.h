@@ -9,6 +9,8 @@
 
 #include "video_source.h"   // VideoFrameRef
 
+class AudioMixer;
+
 class HdmiRxSource {
  public:
   ~HdmiRxSource() { Stop(); }
@@ -16,6 +18,8 @@ class HdmiRxSource {
   void Stop();
   bool Active() const { return running_; }
   bool HasSignal() const { return signal_; }
+  // HDMI 입력 음성(ALSA 캡처 카드 rockchiphdmiin)을 보낼 믹서. Start() 전에 지정. 없으면 무음.
+  void SetAudio(AudioMixer* a) { audio_ = a; }
 
   // 합성 스레드: 현재 프레임 사용 시작/끝 (그 사이에는 버퍼를 드라이버에 돌려주지 않음)
   bool Acquire(VideoFrameRef& out);
@@ -23,9 +27,11 @@ class HdmiRxSource {
 
  private:
   void Run(std::string dev);
+  void AudioRun();
   bool Session(const std::string& dev);   // 신호 1회 연결 ~ 끊김/변경까지
 
-  std::thread th_;
+  AudioMixer* audio_ = nullptr;
+  std::thread th_, ath_;
   std::atomic<bool> running_{false}, stop_{false}, signal_{false};
   std::mutex mu_;
   int cur_ = -1;              // 현재 보관 중인 버퍼 index (-1 = 없음)

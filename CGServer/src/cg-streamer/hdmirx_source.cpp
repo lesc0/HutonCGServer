@@ -11,8 +11,12 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <dlfcn.h>
+#include <vector>
 
 #include <rga/rga.h>
+
+#include "audio_mixer.h"
 
 static int Xioctl(int fd, unsigned long req, void* arg) {
   int r;
@@ -26,12 +30,75 @@ bool HdmiRxSource::Start(const std::string& dev) {
   stop_ = false;
   running_ = true;
   th_ = std::thread(&HdmiRxSource::Run, this, dev);
+  if (audio_) ath_ = std::thread(&HdmiRxSource::AudioRun, this);
   return true;
+}
+
+// ---- 음성: libasound.so.2 를 dlopen (개발 헤더/링크 의존 없이 캡처만 사용) ----
+// HDMI 수신 칩의 I2S 캡처 카드("rockchiphdmiin")를 plughw 로 열어 48kHz S16 스테레오로 받는다.
+void HdmiRxSource::AudioRun() {
+  pthread_setname_np(pthread_self(), "cg-hdmi-aud");
+  struct Api {
+    int (*open)(void**, const char*, int, int);
+    int (*set_params)(void*, int, int, unsigned, unsigned, int, unsigned);
+    long (*readi)(void*, void*, unsigned long);
+    int (*recover)(void*, int, int);
+    int (*close)(void*);
+  } a{};
+  void* lib = dlopen("libasound.so.2", RTLD_NOW);
+  if (lib) {
+    a.open = (decltype(a.open))dlsym(lib, "snd_pcm_open");
+    a.set_params = (decltype(a.set_params))dlsym(lib, "snd_pcm_set_params");
+    a.readi = (decltype(a.readi))dlsym(lib, "snd_pcm_readi");
+    a.recover = (decltype(a.recover))dlsym(lib, "snd_pcm_recover");
+    a.close = (decltype(a.close))dlsym(lib, "snd_pcm_close");
+  }
+  if (!lib || !a.open || !a.set_params || !a.readi || !a.recover || !a.close) {
+    fprintf(stderr, "[hdmirx] libasound.so.2 를 쓸 수 없음 - HDMI 음성 없음\n");
+    if (lib) dlclose(lib);
+    return;
+  }
+  // snd_pcm.h 상수: STREAM_CAPTURE=1, FORMAT_S16_LE=2, ACCESS_RW_INTERLEAVED=3
+  const int kCapture = 1, kS16Le = 2, kRwInterleaved = 3;
+  const char* kDev = "plughw:CARD=rockchiphdmiin,DEV=0";
+  constexpr int kChunk = 1024;
+  std::vector<int16_t> raw(kChunk * 2);
+  std::vector<float> pcm(kChunk * 2);
+  void* pcm_h = nullptr;
+  bool warned = false;
+  while (!stop_) {
+    if (!pcm_h) {   // 신호가 없거나 장치가 아직 준비 안 되면 재시도
+      if (a.open(&pcm_h, kDev, kCapture, 0) < 0 ||
+          a.set_params(pcm_h, kS16Le, kRwInterleaved, 2, AudioMixer::kRate, 1, 100000) < 0) {
+        if (pcm_h) { a.close(pcm_h); pcm_h = nullptr; }
+        if (!warned) { fprintf(stderr, "[hdmirx] 음성 캡처 열기 실패 (%s) - 재시도\n", kDev); warned = true; }
+        for (int i = 0; i < 10 && !stop_; i++) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        continue;
+      }
+      warned = false;
+      printf("[hdmirx] 음성 캡처 시작: %s\n", kDev);
+    }
+    const long n = a.readi(pcm_h, raw.data(), kChunk);
+    if (n < 0) {   // overrun/신호 끊김: 복구 안 되면 닫고 다시 연다
+      if (a.recover(pcm_h, (int)n, 1) < 0) {
+        a.close(pcm_h);
+        pcm_h = nullptr;
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      }
+      continue;
+    }
+    for (long i = 0; i < n * 2; i++) pcm[i] = raw[i] / 32768.f;
+    audio_->PushLive(pcm.data(), (int)n);
+  }
+  if (pcm_h) a.close(pcm_h);
+  dlclose(lib);
 }
 
 void HdmiRxSource::Stop() {
   stop_ = true;
   if (th_.joinable()) th_.join();
+  if (ath_.joinable()) ath_.join();
+  if (audio_) audio_->Clear();
   running_ = false;
   signal_ = false;
 }
