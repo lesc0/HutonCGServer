@@ -3,9 +3,10 @@
 #   ./start.sh     모두 시작 (이미 떠 있으면 건너뜀)
 # 종료: ./stop.sh
 #
+# 송출 설정(output 1/2/3, udp_ip, udp_port)은 cgsetup.cfg 에서 관리.
 # 환경변수로 바꿀 수 있음 (기본값은 지금 쓰던 값):
 #   CG_PROJECT=자막프로젝트     송출할 프로젝트 이름 (bin/project/<이름>.json)
-#   CG_UDP=10.10.10.18:1234    송출 목적지
+#   CG_UDP=10.10.10.18:1234    cgsetup.cfg 의 udp_ip/udp_port 대신 쓸 목적지 (임시 테스트용, 지정 시 cfg보다 우선)
 #   CG_EDITOR_PORT=5173        cg-editor 포트
 #   DISPLAY=:0                 Chromium·해상도 설정에 쓸 X 디스플레이
 set -u
@@ -13,7 +14,6 @@ cd "$(dirname "$(readlink -f "$0")")"
 mkdir -p log .run
 
 PROJECT=${CG_PROJECT:-자막프로젝트}
-UDP=${CG_UDP:-10.10.10.18:1234}
 PORT=${CG_EDITOR_PORT:-5173}
 export DISPLAY=${DISPLAY:-:0}
 EDITOR_DIR=../src/cg-editor
@@ -28,11 +28,11 @@ else
   (cd "$EDITOR_DIR" && ./start.sh) || echo "  시작 실패 (수동으로 $EDITOR_DIR/start.sh 확인)"
 fi
 
-echo "[2/3] cg-streamer (project=$PROJECT udp=$UDP)"
+echo "[2/3] cg-streamer (project=$PROJECT, 송출 설정은 cgsetup.cfg${CG_UDP:+", udp=$CG_UDP(override)"})"
 if pgrep -f "cg-streamer --run" >/dev/null; then
   echo "  이미 실행 중"
 else
-  nohup ./cg-streamer --run --project="project/$PROJECT.json" --udp="$UDP" --autoplay \
+  nohup ./cg-streamer --run --project="project/$PROJECT.json" ${CG_UDP:+--udp="$CG_UDP"} --autoplay \
     > log/cg-streamer.log 2>&1 &
   disown
   sleep 2

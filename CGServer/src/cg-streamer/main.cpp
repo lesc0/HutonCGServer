@@ -11,6 +11,9 @@
 //   --no-sync : UI 지터 버퍼 끔 (항상 최신 그림 — 지연 0 이지만 CEF 박자와 어긋나 0/2프레임씩 끊김)
 //   --paint-fps=N : CEF 렌더링 fps (기본 60). 인코딩/출력은 60fps 유지(직전 프레임 반복)
 //         추가 크로미움 스위치: --cef:이름[=값]  (예: --cef:use-angle=gles)
+//   --setup=cgsetup.cfg : 송출 설정 파일 (기본 ./cgsetup.cfg, 없으면 기본값 사용)
+//         output=1(HDMI만) 2(UDP만, 기본) 3(HDMI+UDP) / udp_ip=... / udp_port=...
+//         커맨드라인의 --udp=/--out=/--view/--preview 는 이 파일보다 항상 우선
 //   출력: H.264(MPP) -> MPEG-TS(ffmpeg muxer) -> UDP (기본 udp://127.0.0.1:1234)
 //   --run 은 동시에 하나만: 두 번째 실행은 즉시 종료됨 (/tmp/cg-streamer.run.lock)
 // 실행 중 제어(UDP 127.0.0.1:5555):  echo next | nc -u -w0 127.0.0.1 5555
@@ -90,6 +93,13 @@ static std::string g_project = "project.json";
 static std::string g_out = "udp://127.0.0.1:1234?pkt_size=1316";
 static std::string g_exe, g_webdir;
 
+// cgsetup.cfg: output=1(HDMI만) 2(UDP만, 기본) 3(HDMI+UDP) / udp_ip / udp_port
+// 입력(HDMI RX)은 자동 감지이므로 설정 대상 아님. --setup= 로 경로 변경 가능, 커맨드라인 인자가 항상 우선.
+static std::string g_setup_cfg = "cgsetup.cfg";
+static int g_output_type = 2;
+static std::string g_udp_ip = "127.0.0.1";
+static int g_udp_port = 1234;
+
 // HTTP 제어 (--http=PORT --bind=ADDR --token=TOKEN). 기본은 loopback 전용, 토큰 없음.
 static int g_http_port = kCtlPort;               // TCP 와 UDP 포트는 별개라 같은 번호를 써도 충돌하지 않는다
 static std::string g_http_bind = "127.0.0.1";
@@ -154,6 +164,28 @@ static bool ReadFile(const std::string& path, std::string& out) {
   ss << f.rdbuf();
   out = ss.str();
   return true;
+}
+
+// cgsetup.cfg 로드: "키=값" 줄 단위, '#' 이후는 주석. 파일이 없으면 기본값 그대로 조용히 진행.
+static void LoadSetupCfg(const std::string& path) {
+  std::ifstream f(path);
+  if (!f) return;
+  auto trim = [](std::string s) {
+    size_t a = s.find_first_not_of(" \t\r\n");
+    size_t b = s.find_last_not_of(" \t\r\n");
+    return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
+  };
+  std::string line;
+  while (std::getline(f, line)) {
+    size_t h = line.find('#');
+    if (h != std::string::npos) line.resize(h);
+    size_t eq = line.find('=');
+    if (eq == std::string::npos) continue;
+    std::string k = trim(line.substr(0, eq)), v = trim(line.substr(eq + 1));
+    if (k == "output") g_output_type = atoi(v.c_str());
+    else if (k == "udp_ip") g_udp_ip = v;
+    else if (k == "udp_port") g_udp_port = atoi(v.c_str());
+  }
 }
 
 // ---------- 클라이언트 ----------
@@ -872,6 +904,13 @@ int main(int argc, char* argv[]) {
     if (!strcmp(argv[i], "--run")) g_app_mode = AppMode::kRun;
   int code = CefExecuteProcess(main_args, app, nullptr);
   if (code >= 0) return code;
+
+  for (int i = 1; i < argc; i++)
+    if (!strncmp(argv[i], "--setup=", 8)) g_setup_cfg = argv[i] + 8;
+  LoadSetupCfg(g_setup_cfg);
+  g_out = "udp://" + g_udp_ip + ":" + std::to_string(g_udp_port) + "?pkt_size=1316";
+  if (g_output_type == 1) { g_view = true; g_encode = false; }  // HDMI 직결만: 로컬 전체화면, 인코딩/UDP 없음
+  else if (g_output_type == 3) g_preview = true;                // HDMI+UDP 동시: 인코딩 결과를 로컬 창에도 표시
 
   int seconds = 0;
   for (int i = 1; i < argc; i++) {
