@@ -12,16 +12,19 @@
 //   --paint-fps=N : CEF 렌더링 fps (기본 60). 인코딩/출력은 60fps 유지(직전 프레임 반복)
 //         추가 크로미움 스위치: --cef:이름[=값]  (예: --cef:use-angle=gles)
 //   출력: H.264(MPP) -> MPEG-TS(ffmpeg muxer) -> UDP (기본 udp://127.0.0.1:1234)
+//   --run 은 동시에 하나만: 두 번째 실행은 즉시 종료됨 (/tmp/cg-streamer.run.lock)
 // 실행 중 제어(UDP 127.0.0.1:5555):  echo next | nc -u -w0 127.0.0.1 5555
 //   next | prev | goto N | quit
 // 영상(페이지 JSON 의 "video"): 네이티브 MPP 디코딩 -> RGA 로 HTML UI(투명 배경)와 합성 -> 인코딩
 //   player.html 이 cefQuery 로 요청: video:play:<경로> | video:stop | video:rect:x,y,w,h
 //   "video": "hdmirx" (또는 "/dev/videoN") 이면 HDMI 입력(rk_hdmirx)을 라이브 소스로 합성
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <spawn.h>
+#include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -670,7 +673,9 @@ static void UdpLoop(CefRefPtr<Client> client) {
 }
 
 // ---------- HTTP 제어 ----------
-// POST /play|run|stop|clear|pause|cut|skip|next|prev     POST /play/N  /goto/N (1부터)
+// POST /play|run|stop|clear|pause|cut|skip|next|prev|reload   POST /play/N  /goto/N (1부터)
+//   reload : project 파일을 디스크에서 다시 읽어 1페이지로 돌아감 (에디터에서 저장한 내용 반영)
+//   switch : 본문(UTF-8 평문) = bin/project 의 다른 프로젝트 이름(.json 제외) -> 그 파일로 바꿔서 reload
 // POST /stamp/{1|2}/{play|stop|pause}                    POST /global/{play|stop}
 // PUT  /text/{linkName}  본문 {"text":"..."} (UTF-8)       GET /status      POST /quit
 // 명령은 CEF UI 스레드에서 cg.cmd(이름, 인자, 본문) 으로 실행되고, 응답은 접수 결과만 돌려준다.
@@ -704,6 +709,12 @@ static bool AllDigits(const std::string& s) {
 static bool IsLinkName(const std::string& s) {
   return !s.empty() && s.size() <= 100 &&
          std::all_of(s.begin(), s.end(), [](unsigned char c) { return isalnum(c) || c == '_' || c == '-'; });
+}
+
+// 프로젝트 이름(한글 포함 UTF-8). 경로 구분자/상위 경로/제어문자만 막는다(cg-editor 의 safeName 과 같은 취지).
+static bool SafeProjectName(const std::string& s) {
+  if (s.empty() || s.size() > 200 || s == "." || s == "..") return false;
+  return std::none_of(s.begin(), s.end(), [](unsigned char c) { return c == '/' || c == '\\' || c < 0x20; });
 }
 
 static void HttpReply(int fd, int code, const std::string& body) {
@@ -775,8 +786,15 @@ static void HttpHandle(int fd, CefRefPtr<Client> client) {
   if (seg.size() == 1 && name == "quit") {
     g_quit = true;
     return HttpReply(fd, 200, "{\"ok\":true}");
+  } else if (seg.size() == 1 && name == "switch") {   // 본문(UTF-8 평문) = bin/project 의 다른 프로젝트 이름(.json 제외)
+    if (!SafeProjectName(body)) return HttpReply(fd, 400, "{\"ok\":false,\"error\":\"invalid project name\"}");
+    const auto np = std::filesystem::path(g_project).parent_path() / (body + ".json");
+    if (!std::filesystem::exists(np)) return HttpReply(fd, 404, "{\"ok\":false,\"error\":\"project not found\"}");
+    g_project = np.string();
+    CefPostTask(TID_UI, base::BindOnce(&Client::Exec, client, std::string("cg.cmd(\"reload\",\"\",\"\")")));
+    return HttpReply(fd, 200, "{\"ok\":true}");
   } else if (seg.size() == 1 && (name == "play" || name == "run" || name == "stop" || name == "clear" || name == "pause" ||
-                                 name == "cut" || name == "skip" || name == "next" || name == "prev")) {
+                                 name == "cut" || name == "skip" || name == "next" || name == "prev" || name == "reload")) {
     ok = true;
   } else if (seg.size() == 2 && (name == "play" || name == "goto") && AllDigits(seg[1])) {
     arg = seg[1]; ok = true;
@@ -828,6 +846,23 @@ static void HttpLoop(CefRefPtr<Client> client) {
 
 static void OnSignal(int) { g_quit = true; }
 
+// --run 중복 실행 방지: 같은 하드웨어 인코더/UDP 목적지/컨트롤 포트를 놓고 여러 인스턴스가
+// 동시에 떠 있으면 출력이 서로 섞여 비트레이트가 이상해진다. flock 은 fd 가 열려 있는 동안만
+// 유지되므로 비정상 종료해도 커널이 알아서 풀어준다 (별도 정리 불필요).
+static int g_run_lock_fd = -1;
+static bool AcquireRunLock() {
+  g_run_lock_fd = open("/tmp/cg-streamer.run.lock", O_CREAT | O_RDWR, 0644);
+  if (g_run_lock_fd < 0) return true;  // 잠금 파일을 못 만들면(권한 등) 그냥 진행
+  if (flock(g_run_lock_fd, LOCK_EX | LOCK_NB) == 0) {
+    if (ftruncate(g_run_lock_fd, 0) == 0) {
+      std::string pid = std::to_string(getpid()) + "\n";
+      if (write(g_run_lock_fd, pid.data(), pid.size()) < 0) { /* 참고용 PID 기록 실패는 무시 */ }
+    }
+    return true;
+  }
+  return false;
+}
+
 int main(int argc, char* argv[]) {
   CefMainArgs main_args(argc, argv);
   CefRefPtr<App> app = new App;
@@ -871,6 +906,11 @@ int main(int argc, char* argv[]) {
   g_webdir = fs::path(g_exe).parent_path().string() + "/web";
 
   const bool run_mode = (g_app_mode == AppMode::kRun);
+  if (run_mode && !AcquireRunLock()) {
+    fprintf(stderr, "[cg] 이미 다른 cg-streamer --run 인스턴스가 실행 중입니다. "
+                     "먼저 종료하세요 (예: curl -X POST http://127.0.0.1:5555/quit).\n");
+    return 1;
+  }
   const bool osr = run_mode && !g_view;
 
   CefSettings settings;

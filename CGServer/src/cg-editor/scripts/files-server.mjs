@@ -9,7 +9,12 @@
 //   PUT  /projects/<이름>                    프로젝트 저장 (data: 미디어는 bin/media 로 풀고 ../media/<파일> 로 바꿈)
 //   DELETE /projects/<이름>                  프로젝트 삭제 (bin/media 의 미디어는 지우지 않음)
 //
+//   /ctl/*  : cg-streamer 의 HTTP 컨트롤 포트(기본 127.0.0.1:5555)로 그대로 중계.
+//             브라우저가 직접 그 포트를 부르면 CORS 로 막히므로 같은 오리진인 이 서버를 거친다.
+//             예) POST /ctl/next  GET /ctl/status  POST /ctl/goto/2
+//
 // 환경변수: CG_FILES_PORT(8081) CG_FILES_HOST(127.0.0.1) CG_MEDIA_DIR CG_PROJECT_DIR
+//          CG_CTL_PORT(5555) CG_CTL_HOST(127.0.0.1) CG_CTL_TOKEN(없음, cg-streamer --token 과 맞출 것)
 // 의존성 없음(Node 내장 모듈만).
 import http from 'node:http';
 import fs from 'node:fs';
@@ -24,6 +29,9 @@ const MEDIA_DIR = path.resolve(process.env.CG_MEDIA_DIR || path.join(root, 'bin/
 const PROJECT_DIR = path.resolve(process.env.CG_PROJECT_DIR || path.join(root, 'bin/project'));
 const PORT = Number(process.env.CG_FILES_PORT || 8081);
 const HOST = process.env.CG_FILES_HOST || '127.0.0.1';
+const CTL_PORT = Number(process.env.CG_CTL_PORT || 5555);
+const CTL_HOST = process.env.CG_CTL_HOST || '127.0.0.1';
+const CTL_TOKEN = process.env.CG_CTL_TOKEN || '';
 const MAX_PROJECT = 50 * 1024 * 1024;
 
 const KINDS = {
@@ -49,7 +57,7 @@ function cors(req, res) {
     if (o === h || (loopback.includes(o) && loopback.includes(h))) {     // 에디터와 같은 호스트에서 온 요청만
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Methods', 'GET,PUT,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Range');
       res.setHeader('Access-Control-Expose-Headers', 'Content-Range,Accept-Ranges,Content-Length');
     }
@@ -134,6 +142,23 @@ function readBody(req, limit) {
   });
 }
 
+// cg-streamer 의 HTTP 컨트롤 포트로 요청을 그대로 넘긴다 (메서드/본문 보존, 토큰은 여기서 붙임).
+function proxyCtl(req, res, segRest, search) {
+  const headers = {};
+  if (CTL_TOKEN) headers['Authorization'] = 'Bearer ' + CTL_TOKEN;
+  if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'];
+  // Content-Length 를 그대로 넘겨야 한다: 없으면 Node 가 chunked 로 보내는데
+  // cg-streamer 의 단순 HTTP 서버는 chunked 를 모르고 Content-Length 만 본다(본문이 빈 것으로 읽힘).
+  if (req.headers['content-length']) headers['Content-Length'] = req.headers['content-length'];
+  const preq = http.request({host: CTL_HOST, port: CTL_PORT, method: req.method,
+    path: '/' + segRest.map(encodeURIComponent).join('/') + (search || ''), headers}, (pres) => {
+    res.writeHead(pres.statusCode || 502, {'Content-Type': pres.headers['content-type'] || 'application/json; charset=utf-8', 'Cache-Control': 'no-store'});
+    pres.pipe(res);
+  });
+  preq.on('error', () => fail(res, 502, '송출 엔진(cg-streamer)에 연결하지 못했습니다. 실행 중인지 확인하세요.'));
+  req.pipe(preq);
+}
+
 const server = http.createServer(async (req, res) => {
   cors(req, res);
   try {
@@ -182,6 +207,7 @@ const server = http.createServer(async (req, res) => {
         }
       }
     }
+    if (seg[0] === 'ctl' && seg.length > 1) return proxyCtl(req, res, seg.slice(1), url.search);
     fail(res, 404, 'not found');
   } catch (e) {
     console.error('[files]', e);

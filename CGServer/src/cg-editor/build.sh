@@ -1,5 +1,5 @@
 #!/bin/bash
-# cg-editor 빌드: 의존성 설치(필요할 때) + 프로덕션 빌드(dist/)
+# cg-editor 빌드: 의존성 설치(필요할 때) + 프로덕션 빌드(.next/)
 #   ./build.sh            node_modules 가 없으면 npm ci 후 빌드
 #   ./build.sh --install  node_modules 를 항상 npm ci 로 새로 설치한 뒤 빌드
 #   ./build.sh --check    빌드 전에 타입 검사(tsc --noEmit)도 실행
@@ -30,4 +30,4 @@ if [ "$CHECK" = 1 ]; then
 fi
 echo "[build] npm run build"
 npm run build
-echo "[build] 완료: dist/  (실행: ./start.sh --prod)"
+echo "[build] 완료: .next/  (실행: ./start.sh --prod)"

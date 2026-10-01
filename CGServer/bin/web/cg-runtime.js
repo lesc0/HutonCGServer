@@ -352,6 +352,24 @@ function rangeStart() {
 }
 function stopMain() { main.playing = false; main.visible = false; main.time = 0; dirty = true; }
 
+// 디스크의 project 파일을 다시 읽어 적용한다 (에디터에서 저장한 내용을 반영).
+// --autoplay 로 띄운 엔진이면 처음 실행 때처럼 바로 재생 시작, 아니면(수동 제어) 정지 상태로 1페이지에 둔다.
+async function reloadProject() {
+  if (!window.cefQuery) return false;
+  let next;
+  try { next = fixProject(JSON.parse(await q('load'))); } catch (e) { console.error('[cg] reload 실패:', e); return false; }
+  project = next;
+  stamps = [idleChannel(), idleChannel()];
+  globalCh = idleChannel();
+  nativeVideo.key = '';
+  const srcs = new Set();
+  for (const p of project.pages) for (const i of p.items) if (i.type === 'image' && i.src) srcs.add(i.src);
+  for (const s of srcs) imageFor(s);
+  if (new URLSearchParams(location.search).get('autoplay') === '1') startMain(rangeStart());
+  else { main.index = 0; main.time = 0; main.cycle = 1; main.playing = false; main.visible = false; dirty = true; }
+  return true;
+}
+
 function stampCtl(n, action) {
   const ch = project.channels && project.channels.stamps[n];
   if (!ch) return false;
@@ -390,6 +408,7 @@ const cg = {
     switch (name) {
       case 'play': startMain(Number.isInteger(n) && n >= 1 ? n - 1 : main.index); return true;
       case 'run': startMain(rangeStart()); return true;
+      case 'reload': reloadProject(); return true;
       case 'stop': case 'clear': stopMain(); return true;
       case 'pause': if (main.visible) { main.playing = !main.playing; dirty = true; } return true;
       case 'cut': if (main.visible) { main.time = Math.max(main.time, pageAt(main.index).inDuration); dirty = true; } return true;

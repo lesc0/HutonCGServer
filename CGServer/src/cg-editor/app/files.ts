@@ -36,3 +36,12 @@ export const loadProjectFile = async (name: string): Promise<unknown> => call('/
 export const saveProjectFile = async (name: string, project: Project): Promise<{name: string; updated: number; extractedMedia: number; project: Project}> =>
   call('/projects/' + encodeURIComponent(name), {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(project)});
 export const deleteProjectFile = async (name: string): Promise<{ok: boolean}> => call('/projects/' + encodeURIComponent(name), {method: 'DELETE'});
+
+// 송출 제어: 파일 서버가 cg-streamer 의 HTTP 컨트롤 포트(기본 127.0.0.1:5555)로 중계한다(/ctl/*).
+export type CtlStatus = {ready: boolean; project?: string; page?: number; pages?: number; playing?: boolean; visible?: boolean; time?: number; cycle?: number};
+export const ctlStatus = async (): Promise<CtlStatus> => call('/ctl/status');
+export const ctlCommand = async (cmd: string, arg?: number | string): Promise<{ok: boolean}> =>
+  call('/ctl/' + cmd + (arg === undefined ? '' : '/' + encodeURIComponent(arg)), {method: 'POST'});
+// 다른 프로젝트로 전환(본문에 이름을 UTF-8 평문으로 보냄, bin/project 기준 .json 제외)
+export const ctlSwitch = async (name: string): Promise<{ok: boolean}> =>
+  call('/ctl/switch', {method: 'POST', headers: {'Content-Type': 'text/plain; charset=utf-8'}, body: name});

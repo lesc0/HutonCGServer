@@ -14,7 +14,10 @@ export type StampChannel={name:string;page:Page;position:'top'|'bottom';mode:'au
 export type GlobalChannel={video:Item;loops:number;mark:boolean;start:number;end:number};
 export type Channels={stamps:(StampChannel|null)[];global:GlobalChannel|null};
 export type Project={format:'cg-editor';version:2;name:string;pages:Page[];width:1920;height:1080;styles?:Item[];templates?:Page[];runSettings?:RunSettings;channels?:Channels};
-export const uid=()=> 'o'+crypto.randomUUID().replaceAll('-','');
+// crypto.randomUUID()는 HTTPS/localhost 같은 보안 컨텍스트에서만 동작한다.
+// 보드를 LAN IP(http://)로 열면 사용할 수 없으므로 getRandomValues로 대체한다.
+const randomHex=()=>{if(typeof crypto!=='undefined'&&crypto.getRandomValues)return Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');return Array.from({length:32},()=>Math.floor(Math.random()*16).toString(16)).join('')};
+export const uid=()=> 'o'+randomHex();
 export function make(type:Kind,patch:Partial<Item>={}):Item{return {id:uid(),type,name:type==='text'?'새 자막':type==='clock'?'시계':type==='timer'?'계수기':type==='video'?'동영상':type==='audio'?'오디오':type==='image'?'이미지':'도형',text:'자막을 입력하세요',x:250,y:400,w:1400,h:180,size:100,fill:'#ffffff',stroke:'#000000',strokeWidth:0,edge2:'#ffffff',edge2Width:0,edge3:'#000000',edge3Width:0,bold:false,italic:false,underline:false,outline:false,family:'Arial',align:'left',opacity:1,rotation:0,cRotate:0,textWidth:100,space:100,thickness:0,kerning:0,leading:20,flipX:false,flipY:false,shadow:false,shadowColor:'#000000',shadowBlur:4,shadowDepth:8,shadowAngle:45,hidden:false,locked:false,fixed:false,autoSize:false,moves:[],start:0,duration:10,effect:'none',outEffect:'none',inDuration:1,outDuration:1,direction:'left',speed:1,volume:1,trim:0,mediaLoop:false,background:false,runs:[],effectPreset:0,tileX:8,tileY:8,softness:0,effectBorder:0,curlRadius:60,effectAngle:0,blinkCount:4,clockFormat:'HH:mm:ss',timerSeconds:300,timerCount:'down',...patch}}
 export const blankPage=(n=1):Page=>({id:uid(),name:'페이지 '+n,bg:'transparent',items:[],duration:30,mode:'Still',effect:'none',outEffect:'none',inDuration:1,outDuration:1,options:defaultPageOptions()});
 const number=(v:unknown,d:number,min=-100000,max=100000)=>typeof v==='number'&&Number.isFinite(v)?Math.max(min,Math.min(max,v)):d;

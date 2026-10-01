@@ -498,3 +498,69 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
 - 재생: 페이지당 18초, 자동 반복(loops 100). 전환은 다음 페이지가 오른쪽에서 밀려 들어오는 `move`(0.7초), 이전 페이지는 `fade` 로 퇴장(0.5초).
   수동으로 넘기려면 Run Setting Mode=Manual. 에디터의 Timeline Preview 는 단일 페이지라서 여러 페이지 확인은 Run Setting 의 All File Playback.
 - 확인: 실행엔진 캡처(1페이지, 2페이지, 전환 중), 글자 폭 측정으로 자막 길이 설정(3102/3159px).
+
+### CEF 130 rkmpp 패치 빌드 적용, cg-streamer 재빌드 (보드에서)
+- `/root/work/cef_custom_130_arm64.tar.gz`(서버에서 빌드한 V4L2/rkmpp 패치 CEF)를 `/opt/cef/cef_custom_130_arm64`에 설치.
+  `make_distrib.py` minimal 패키징을 거치지 않은 원시 빌드 산출물이라 `cmake/`, `CMakeLists.txt`, `include/cef_version.h`,
+  `include/cef_config.h`, `include/base/internal/cef_net_error_list.h`, `Release/chrome-sandbox`, `Release/libvulkan.so.1` 이 빠져 있었음 →
+  기존 공식 130.1.16 배포본(동일 커밋 해시 `5a7e5ed`, 버전 문자열 일치 확인)에서 보강.
+- `~/.bashrc`의 `CEF_ROOT`를 새 경로로 변경, `cg-streamer` 재빌드.
+- 확인: `libcef.so`에 `/dev/video-dec` 문자열 5개(기존 공식본은 0개) → V4L2 패치 반영 확인. `cg-streamer` 실행 시 zygote/gpu-process/renderer 등 CEF 하위 프로세스 정상 기동,
+  `--run --out=test.ts --seconds=10`로 1920×1080/60fps/드롭 없음 H.264 출력 확인(ffprobe).
+  실제 RK3588 GPU로 mp4 `<video>` 하드웨어 디코딩이 되는지(`mpp_service` fd)는 미검증 — `cef_server_build.md` 5단계 참고.
+
+### [cg-editor] Cloudflare/vinext 제거 → 순수 Next.js 전환
+- 배경: `npm run dev`(vinext + `@cloudflare/vite-plugin`, 로컬 workerd 에뮬레이션)가 보드(Debian 11, glibc 2.31)에서 `workerd`
+  요구 glibc(≥2.35)를 못 맞춰 기동 즉시 죽고, miniflare가 죽은 프로세스에 쓰다 `EPIPE`. 이 편집기의 로컬(보드) 사용에는
+  ChatGPT Sites 호스팅 전용 기능(D1/R2 클라우드 저장, Workers 바인딩)이 불필요해 Cloudflare 레이어를 통째로 제거.
+- 삭제: `vite.config.ts`, `build/`(sites-worker, connector-preview 등 Sites 플러그인 전용), `lib/storage.ts`, `db/`, `drizzle.config.ts`, `drizzle/`,
+  `cloudflare-env.d.ts`, D1/R2 의존 `app/api/projects`·`app/api/media` 라우트(로컬 저장은 `files-server.mjs`가 이미 처리, 안 쓰이던 코드였음).
+- `package.json`: `dev`/`build`/`start` → `next dev`/`next build`/`next start`, `@cloudflare/*`·`vinext`·`vite`·`wrangler`·`drizzle-*` 등 devDependencies 제거.
+  `tsconfig.json`에서 `@cloudflare/workers-types` 제거.
+- `start.sh`/`build.sh`의 옛 wrangler 흔적도 수정: Next.js 16 CLI는 `--host`가 아니라 `--hostname`(dev/start 둘 다), 빌드 산출물은 `dist/`가 아니라 `.next/`.
+- 부수적으로 발견: `.next`/`.vinext`/`.wrangler`/`next-env.d.ts`가 이전에 root 권한으로 생성돼 있어 pi 권한 실행 시 권한 오류 → 정리.
+  (교훈: 이 보드에서 `npm run dev`를 터미널에서 직접 실행하면 root로 뜨기 쉬우므로 꼭 `./start.sh` 사용할 것, 그래야 파일 서버도 같이 뜸.)
+- 확인: `./start.sh`로 에디터(`:5173`)·파일 서버(`:8081`) 정상 기동, `tsc --noEmit` 통과. `app/` 쪽 에디터 코드는 처음부터 순수 Next.js App Router
+  코드라 수정 불필요했음.
+
+### [cg-editor] LAN 접속, 보안 컨텍스트 문제 수정
+- `crypto.randomUUID()`는 HTTPS/localhost 같은 "보안 컨텍스트"에서만 동작 → 보드를 LAN IP(`http://10.10.10.56:5173`)로 열면
+  `crypto.randomUUID is not a function`으로 새 프로젝트 생성이 깨짐. `app/model.ts`의 `uid()`를 `crypto.getRandomValues`(보안 컨텍스트 제한 없음)
+  기반으로 교체.
+- `.env`의 `CG_EDITOR_HOST=0.0.0.0` 활성화(파일 서버도 같은 주소로 열리게). LAN IP로 열면 Next.js 16이 기본으로 HMR 리소스를 cross-origin
+  차단 → `next.config.ts`에 `allowedDevOrigins: ['10.10.10.56']` 추가.
+- 확인: 보드 LAN IP로 에디터·파일 서버 접속, 프로젝트 열기(`bin/project` 목록 정상 응답) 확인.
+
+### cg-streamer HTTP 컨트롤 중계("송출 제어" 탭) 신설
+- 배경: `cg-streamer`는 `--run` 모드에서 HTTP 컨트롤 서버(기본 `127.0.0.1:5555`, play/next/prev/goto/stamp/global/text/quit/status)가
+  항상 켜져 있지만, 브라우저가 CORS 때문에 직접 호출할 수 없고 에디터 쪽에 이를 호출하는 코드도 없었음.
+- `scripts/files-server.mjs`에 `/ctl/*` 프록시 추가(`CG_CTL_PORT`/`CG_CTL_HOST`/`CG_CTL_TOKEN` 환경변수, 본문·메서드 보존,
+  토큰은 프록시가 붙임) → 같은 오리진(파일 서버)을 거쳐 CORS 회피. `app/files.ts`에 `ctlStatus()`/`ctlCommand()` 클라이언트 함수.
+- `app/stream-control.tsx`(신규, `useChannels`와 같은 훅 패턴) + `app/page.tsx`에 **"송출 제어"** 탭: 상태 표시(1.5초 폴링: 프로젝트명·페이지·재생여부·시간),
+  Play/Pause/Stop/Cut/Prev/Next/Skip/Clear, 페이지 이동, 엔진 종료(확인창).
+- 버그 하나 발견·수정: 프록시가 `req.pipe(preq)`로 본문을 스트림 전달하면서 `Content-Length`를 안 넘겨 Node가 chunked 로 보냈는데,
+  `cg-streamer`의 단순 HTTP 서버는 chunked 를 모르고 Content-Length 만 봐서 본문이 빈 것으로 읽힘 → `Content-Length` 헤더를 그대로 중계하도록 수정.
+- 확인: curl로 next/goto/pause 등을 프록시 경유로 보내 cg-streamer 상태가 실제로 바뀌는 것 확인(직접 호출과 응답 동일).
+
+### cg-streamer: reload / switch(다른 프로젝트로 전환) 명령, --run 중복 실행 방지
+- **reload**(`POST /reload`): project 파일을 디스크에서 다시 읽음. `cg-streamer`는 시작할 때 프로젝트를 한 번만 읽고 다시 읽는 수단이
+  없었음(에디터에서 저장해도 떠 있는 송출에 반영 안 됨) → `bin/web/cg-runtime.js`에 `reloadProject()` 추가, 네이티브 `load` cefQuery(기존에 이미
+  디스크에서 다시 읽게 구현돼 있던 것)를 재사용.
+- **switch**(`POST /switch`, 본문=UTF-8 평문 프로젝트 이름): `bin/project`의 다른 프로젝트로 통째로 전환. `g_project` 경로를 바꾼 뒤 reload.
+  경로 구분자/상위 경로/제어문자 검증(`SafeProjectName`, 한글 프로젝트명은 허용), 없는 프로젝트는 404.
+- 두 명령 모두 처음엔 "1페이지·정지 상태"로 리셋했는데, 사용자가 반영이 "안 되는 것처럼" 두 번 헷갈려함(실제론 반영됐지만 재생 중이 아니라
+  화면이 그대로/검은 화면) → `--autoplay`로 띄운 엔진이면 reload/switch 후 바로 재생되게 수정(URL의 `autoplay=1` 체크, `rangeStart()`로 시작).
+  수동 제어(비 `--autoplay`)는 기존대로 정지 상태 유지.
+- **`--run` 중복 실행 방지**: 같은 UDP 목적지/컨트롤 포트로 여러 인스턴스가 뜨면 출력이 섞여 비트레이트가 이상해짐 → `/tmp/cg-streamer.run.lock`
+  파일락(`flock`, 비정상 종료해도 커널이 자동 해제). 두 번째 `--run` 은 즉시 "이미 실행 중" 메시지와 함께 종료(exit 1).
+- cg-editor "송출 제어" 탭에 전환용 드롭다운(`bin/project` 목록) + "다른 프로젝트로 전환", "저장한 내용 다시 불러오기(Reload)" 버튼 추가(`app/files.ts`
+  `ctlSwitch()`).
+- 버그 발견·수정: `useStreamControl`의 "언마운트 후 setState 방지" `mounted` ref 가드가 Fast Refresh(핫리로드)로 `false` 에 고정돼버리면
+  그 뒤 모든 액션의 `finally{setBusy(false)}`가 스킵되어 버튼 전체가 영구 disable 되는 버그 → React 18+ 는 언마운트 후 setState가 안전(조용히 무시)하므로
+  가드 자체를 제거.
+- disable/활성 버튼 시각 구분 개선(`app/globals.css` `.streamcontrol`): disable 은 회색조+점선 테두리+`cursor:not-allowed`, 활성은 테두리 강조.
+- 확인: `--run` 중복 실행 시도 → 즉시 거부(exit 1) 및 정상 종료 후 재시작/강제종료(`kill -9`) 후 재시작 모두 정상 확인. reload/switch 를 경로 탈출·존재하지
+  않는 프로젝트명으로 시도 시 올바르게 거부. 8081 프록시 경유로 20회 연속 랜덤 프로젝트 전환(0.3초 간격) 전부 성공, 프로세스 메모리/개수 이상 없음.
+  `tsc --noEmit` 통과.
+- 남은 일: `main.cpp`/`cg-runtime.js` C++·JS 변경은 재빌드·재시작해야 반영됨(핫리로드 대상 아님) — 수정할 때마다 `cg-streamer` 재시작 필요한 걸 계속 깜빡해서
+  디버깅이 늘어졌음, 다음엔 변경 직후 바로 재시작·재검증 습관화.

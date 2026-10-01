@@ -44,14 +44,14 @@ set +a
 
 ARGS=()
 if [ "$MODE" = prod ]; then
-  [ -d dist ] || { echo "dist/ 가 없습니다. 먼저 ./build.sh 를 실행하세요."; exit 1; }
+  [ -d .next ] || { echo ".next/ 가 없습니다. 먼저 ./build.sh 를 실행하세요."; exit 1; }
   CMD=(npm start)
   [ -z "$PORT" ] || ARGS+=(--port "$PORT")
-  [ -z "$HOST" ] || ARGS+=(--ip "$HOST")
+  [ -z "$HOST" ] || ARGS+=(--hostname "$HOST")
 else
   CMD=(npm run dev)
   [ -z "$PORT" ] || ARGS+=(--port "$PORT")
-  [ -z "$HOST" ] || ARGS+=(--host "$HOST")
+  [ -z "$HOST" ] || ARGS+=(--hostname "$HOST")
 fi
 [ ${#ARGS[@]} -eq 0 ] || CMD+=(-- "${ARGS[@]}")
 

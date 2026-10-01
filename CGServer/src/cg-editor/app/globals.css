@@ -138,3 +138,23 @@ input:disabled,textarea:disabled{background:#0a0d15;color:#55617c}
 .dropdown button:hover .menuicon{color:#fff}
 .dropdown{width:max-content;min-width:240px}
 .dropdown button{justify-content:flex-start;text-align:left;white-space:nowrap;padding-right:18px}
+
+/* 송출 제어 탭: cg-streamer 상태 표시 + 명령 버튼 */
+.streamcontrol{display:flex;flex-direction:column;gap:8px;padding:10px;overflow:auto}
+.stream-status{font-size:13px;padding:6px 9px;border-radius:6px;border:1px solid var(--line2);background:var(--field)}
+.stream-status.online{color:var(--ok);border-color:#14c77e55}
+.stream-status.offline{color:#ff8f8f;border-color:#e0525f55}
+.streamcontrol .playcontrols{justify-content:flex-start;padding:0}
+.streamcontrol label{display:flex;align-items:center;gap:6px;font-size:13px}
+.streamcontrol input[type=number]{width:65px}
+.streamcontrol button.danger{align-self:flex-start;color:#ff8f8f;border-color:#e0525f55}
+.streamcontrol button.danger:hover:not(:disabled){background:#4a1a22;border-color:#e0525f;color:#fff}
+.stream-switch{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.stream-switch select{flex:1;min-width:140px;padding:4px}
+.stream-switch select:disabled{opacity:.4;cursor:not-allowed}
+/* 누를 수 있는 버튼과 disable 된 버튼을 명확히 구분: disable 은 회색조+점선+not-allowed, 나머지는 테두리로 강조 */
+.streamcontrol button{border-color:var(--accent2)}
+.streamcontrol button:disabled{opacity:.3;filter:grayscale(1);border:1px dashed var(--line2);cursor:not-allowed;background:var(--field)}
+.streamcontrol button.primary{border-color:#fff3}
+.streamcontrol button.primary:disabled{border:1px dashed var(--line2)}
+.streamcontrol button.danger:disabled{color:var(--muted);border:1px dashed var(--line2)}
