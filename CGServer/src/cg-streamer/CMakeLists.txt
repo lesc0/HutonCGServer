@@ -16,6 +16,14 @@ if(NOT DEFINED PROJECT_ARCH AND CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(aarch64|a
   set(PROJECT_ARCH "arm64")
 endif()
 find_package(CEF REQUIRED)
+# 이 보드의 CEF 배포본에는 Release/ 만 있다. Debug 빌드는 Release 의 libcef.so·런타임 파일을 그대로 쓴다.
+if(NOT EXISTS "${CEF_BINARY_DIR_DEBUG}")
+  set(CEF_BINARY_DIR_DEBUG ${CEF_BINARY_DIR_RELEASE})
+  set(CEF_LIB_DEBUG ${CEF_LIB_RELEASE})
+  if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(CEF_BINARY_DIR ${CEF_BINARY_DIR_RELEASE})
+  endif()
+endif()
 add_subdirectory(${CEF_LIBCEF_DLL_WRAPPER_PATH} libcef_dll_wrapper)
 
 include_directories(${CEF_ROOT})
@@ -47,6 +55,8 @@ if(ENABLE_EXTERNAL_BEGIN_FRAME)
   target_compile_definitions(cg_streamer PRIVATE CG_EBF=1)
 endif()
 SET_EXECUTABLE_TARGET_PROPERTIES(cg_streamer)
+# CEF 가 Release 에 -O2 를 붙이므로(뒤에 오는 쪽이 이김) 우리 코드만 -O3 로 올린다.
+target_compile_options(cg_streamer PRIVATE $<$<CONFIG:Release>:-O3>)
 add_dependencies(cg_streamer libcef_dll_wrapper)
 target_link_libraries(cg_streamer libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} rockchip_mpp rga PkgConfig::FFMPEG pthread ${CMAKE_DL_LIBS} ${X11_LIBRARIES} ${X11_Xext_LIB})
 target_include_directories(cg_streamer PRIVATE ${X11_INCLUDE_DIR} ${CG_ROOT}/inc)

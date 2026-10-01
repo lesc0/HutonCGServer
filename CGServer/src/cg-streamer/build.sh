@@ -1,6 +1,6 @@
 #!/bin/bash
 # cg-streamer 빌드 → bin/cg-streamer (+ libcef.so, 리소스)
-#   ./build.sh [release]  MinSizeRel + -O3 로 빌드 (기본)
+#   ./build.sh [release]  Release + -O3 로 빌드 (기본)
 #   ./build.sh debug      Debug 로 빌드 (-g -O0)
 #   ./build.sh clean      빌드 디렉터리(build/rk3588-debug, build/rk3588-release) 삭제
 #   ./build.sh install    release 로 빌드한 뒤 결과(실행 파일 + CEF 런타임)를 bin/ 으로 복사
@@ -39,13 +39,13 @@ fi
 [ -d "$CEF_ROOT" ] || { echo "CEF_ROOT 를 찾을 수 없습니다: $CEF_ROOT (환경변수 CEF_ROOT 를 지정하세요)"; exit 1; }
 export CEF_ROOT
 
-# release/install: MinSizeRel 이지만 최적화는 -O3 (기본 -Os 를 덮어씀)
+# release/install: Release. CEF 가 -O2 를 붙이므로 -O3 는 CMakeLists.txt 에서 cg_streamer 에만 지정
 if [ "$MODE" = debug ]; then
   BUILD_DIR=../../build/rk3588-debug
   OPTS=(-DCMAKE_BUILD_TYPE=Debug)
 else
   BUILD_DIR=../../build/rk3588-release
-  OPTS=(-DCMAKE_BUILD_TYPE=MinSizeRel "-DCMAKE_C_FLAGS_MINSIZEREL=-O3 -DNDEBUG" "-DCMAKE_CXX_FLAGS_MINSIZEREL=-O3 -DNDEBUG")
+  OPTS=(-DCMAKE_BUILD_TYPE=Release)
 fi
 
 pgrep -x cg-streamer >/dev/null && echo "[build] 주의: cg-streamer 가 실행 중입니다. 빌드 후 재시작해야 반영됩니다."
