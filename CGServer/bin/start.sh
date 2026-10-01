@@ -8,19 +8,20 @@
 #   ./start.sh     모두 시작 (이미 떠 있으면 건너뜀)
 # 종료: ./stop.sh
 #
-# 송출 설정(output 1/2/3, udp_ip, udp_port)은 cgsetup.cfg 에서 관리.
+# 송출 설정(output 1/2/3, udp_ip, udp_port)과 에디터 포트(editor_port)는 cgsetup.cfg 에서 관리.
 # 환경변수로 바꿀 수 있음 (기본값은 지금 쓰던 값):
 #   CG_PROJECT=자막프로젝트     송출할 프로젝트 이름 (bin/project/<이름>.json)
 #   CG_UDP=10.10.10.18:1234    cgsetup.cfg 의 udp_ip/udp_port 대신 쓸 목적지 (임시 테스트용, 지정 시 cfg보다 우선)
-#   CG_EDITOR_PORT=8080        cg-editor 포트 (기본: cg-editor/.env.production 값)
+#   CG_EDITOR_PORT=8080        cg-editor 포트 (기본: cgsetup.cfg 의 editor_port)
 #   DISPLAY=:0                 Chromium·해상도 설정에 쓸 X 디스플레이
 set -u
 cd "$(dirname "$(readlink -f "$0")")"
 mkdir -p log .run
 
 PROJECT=${CG_PROJECT:-자막프로젝트}
-# 에디터 포트: 환경변수 > cg-editor 의 .env/.env.production(production 기본이라 .env.production 이 우선) > 5173
-PORT=${CG_EDITOR_PORT:-$(set -a; . ../src/cg-editor/.env 2>/dev/null; . ../src/cg-editor/.env.production 2>/dev/null; echo "${CG_EDITOR_PORT:-5173}")}
+# 에디터 포트: 환경변수 CG_EDITOR_PORT > cgsetup.cfg 의 editor_port > cg-editor/.env.production > 5173
+CFG_PORT=$(sed -n 's/#.*//; s/^[[:space:]]*editor_port[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' cgsetup.cfg 2>/dev/null | tail -1)
+PORT=${CG_EDITOR_PORT:-${CFG_PORT:-$(set -a; . ../src/cg-editor/.env 2>/dev/null; . ../src/cg-editor/.env.production 2>/dev/null; echo "${CG_EDITOR_PORT:-5173}")}}
 export DISPLAY=${DISPLAY:-:0}
 EDITOR_DIR=../src/cg-editor
 CHROMIUM=/opt/chromium.org/stable/chromium-browser
@@ -31,7 +32,7 @@ echo "[1/3] cg-editor"
 if curl -s -o /dev/null --max-time 2 "http://localhost:$PORT/"; then
   echo "  이미 실행 중"
 else
-  (cd "$EDITOR_DIR" && ./start.sh) || echo "  시작 실패 (수동으로 $EDITOR_DIR/start.sh 확인)"
+  (cd "$EDITOR_DIR" && ./start.sh --port "$PORT") || echo "  시작 실패 (수동으로 $EDITOR_DIR/start.sh 확인)"
 fi
 
 echo "[2/3] cg-streamer (project=$PROJECT, 송출 설정은 cgsetup.cfg${CG_UDP:+", udp=$CG_UDP(override)"})"

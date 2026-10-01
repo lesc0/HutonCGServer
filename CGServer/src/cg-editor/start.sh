@@ -42,6 +42,8 @@ set -a
 set +a
 [ -n "$PORT" ] || PORT="${CG_EDITOR_PORT:-}"
 [ -n "$HOST" ] || HOST="${CG_EDITOR_HOST:-}"
+# 실제로 쓴 포트를 기록: 설정(cgsetup.cfg editor_port 등)을 바꾼 뒤에도 stop.sh 가 예전 포트의 서버를 정리할 수 있게 함
+[ -z "$PORT" ] || echo "$PORT" > "$RUN/cg-editor.port"
 
 ARGS=()
 if [ "$MODE" = prod ]; then

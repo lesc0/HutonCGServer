@@ -766,3 +766,10 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
 - 운영 메모: 이 보드는 cg-streamer(송출 중 CPU ~200%) + 메모리 3.9GB 로 `tsc`가 3분 이상 걸리고 메모리 부족(exit 137)으로 에디터/파일 서버까지 같이 죽을 수 있음.
   타입체크/빌드는 송출을 멈춘 상태에서 하는 것이 안전. (`curl -X POST http://127.0.0.1:5555/quit` 로 cg-streamer 정지)
 - `bin/start.sh`: 에디터 포트를 환경변수 > cg-editor/.env.production(8080) > 5173 순으로 결정(이전엔 5173 고정이라 production 전환 후 키오스크가 빈 5173 을 열었음).
+
+### 에디터 포트를 설정(cgsetup.cfg)으로 관리
+- `bin/cgsetup.cfg`에 `editor_port=8080` 추가(cg-streamer 의 `LoadSetupCfg`는 모르는 키를 무시하므로 영향 없음). 우선순위: 환경변수 `CG_EDITOR_PORT` > `cgsetup.cfg editor_port` > `cg-editor/.env.production` > 5173.
+- `bin/start.sh`가 이 값을 읽어 에디터를 `./start.sh --port <값>`으로 띄우고 키오스크 주소·에디터 실행 여부 확인에도 사용. `bin/stop.sh`도 같은 규칙으로 포트를 구해 에디터 `stop.sh`에 전달.
+- 포트가 또 바뀌어도: `cgsetup.cfg`의 `editor_port`만 고치고 `bin/stop.sh` → `bin/start.sh`. 에디터 `start.sh`가 실제로 쓴 포트를 `.run/cg-editor.port`에 기록하고 `stop.sh`가 그 포트도 정리하므로,
+  설정을 바꾼 뒤 stop 해도 예전 포트의 서버가 남지 않음(8090 으로 띄운 뒤 설정 8080 상태에서 stop → 8090 종료 확인). `stop.sh`의 고정 포트(5173/8080) 강제 종료는 제거.
+- 파일 서버 포트 8081 은 아직 `app/files.ts`(`FILES_PORT`)에 상수로 박혀 있어 설정 대상이 아님(바꾸려면 코드 수정+재빌드 필요).
