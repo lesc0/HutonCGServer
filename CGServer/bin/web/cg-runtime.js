@@ -276,6 +276,31 @@ function pathRounded(c, i) {   // 사각형 / 타원
   else c.rect(0, 0, i.w, i.h);
 }
 
+// crawl/roll 텍스트: 매 프레임 글자를 통째로 다시 그리는 대신, 내용이 안 바뀌는 동안은
+// 오프스크린 캔버스에 한 번만 그려두고 매 프레임은 drawImage로 위치만 옮겨 찍는다.
+// (방송 CG 장비가 텍스트를 텍스처로 구워두고 GPU로 이동만 시키는 것과 같은 발상.)
+// 캔버스에만 적용하는 캐시라 레이어 순서/폰트 렌더링은 기존 그대로 유지됨(CSS 전환과 달리 안전).
+const textCache = new Map();   // item.id -> {canvas, sig}
+function cachedTextCanvas(item, time) {
+  const text = item.type === 'clock' || item.type === 'timer' ? clockText(item, time) : item.text;
+  const sig = JSON.stringify([text, item.size, item.family, item.bold, item.italic, item.fill, item.stroke,
+    item.strokeWidth, item.edge2, item.edge2Width, item.edge3, item.edge3Width, item.w, item.h, item.align,
+    item.kerning, item.space, item.textWidth, item.leading, item.thickness, item.underline, item.cRotate,
+    item.outline, item.shadow, item.shadowColor, item.shadowBlur, item.shadowDepth, item.shadowAngle, item.runs]);
+  let rec = textCache.get(item.id);
+  if (!rec || rec.sig !== sig) {
+    const oc = rec ? rec.canvas : document.createElement('canvas');
+    oc.width = Math.max(1, Math.ceil(item.w));
+    oc.height = Math.max(1, Math.ceil(item.h));
+    const octx = oc.getContext('2d');
+    octx.clearRect(0, 0, oc.width, oc.height);
+    drawText(octx, item, time);
+    rec = { canvas: oc, sig };
+    textCache.set(item.id, rec);
+  }
+  return rec.canvas;
+}
+
 function drawItem(c, item, time, page) {
   if (item.hidden || item.type === 'audio' || item.type === 'video') return;   // 영상은 네이티브가 그림
   const state = effectState(item, time, page.mode, page.duration);
@@ -293,7 +318,8 @@ function drawItem(c, item, time, page) {
   c.scale(item.flipX ? -1 : 1, item.flipY ? -1 : 1);
   if (item.type === 'text' || item.type === 'clock' || item.type === 'timer') {
     const shown = state.effect === 'text' ? Object.assign({}, item, { text: item.text.slice(0, Math.ceil(item.text.length * state.progress)) }) : item;
-    drawText(c, shown, time);
+    if (state.effect === 'crawl' || state.effect === 'roll') c.drawImage(cachedTextCanvas(shown, time), 0, 0);
+    else drawText(c, shown, time);
   } else if (item.type === 'image') {
     const im = imageFor(item.src);
     if (im) c.drawImage(im, 0, 0, item.w, item.h);
