@@ -1,6 +1,10 @@
 #!/bin/bash
 # 보드 화면에 지금과 같은 구성으로 띄우기: cg-editor(웹) + cg-streamer(UDP 송출, 로컬 미리보기 없음) + Chromium 키오스크(cg-editor 화면).
-# cg-streamer는 --gpu로 띄움: 안 주면 CEF가 GPU를 꺼서(disable-gpu-compositing) 페인트가 ~11fps로 떨어짐(가로스크롤 등에서 끊김의 원인이었음).
+# cg-streamer는 --gpu --cef:use-angle=gles-egl 로 띄움:
+#   --gpu 없으면 CEF가 GPU를 꺼서(disable-gpu-compositing) 페인트가 ~11fps로 떨어짐(가로스크롤 등 끊김의 원인).
+#   --cef:use-angle=gles-egl 없으면 ANGLE이 기본 GL(Mesa/GLX) 경로를 시도하다 실패해서 결국 SwiftShader(소프트웨어)로
+#   폴백함 - 이 보드용 커스텀 CEF(cef_server_build.md 참고, Mali DDK 패치 포함)는 gles-egl 로 줘야 진짜 Mali GPU를 씀.
+#   gles-egl 적용 시 paint가 정확히 설정 fps(60)로 나오고 drop=0 (SwiftShader는 75~120fps로 과공급+드롭 발생).
 #   ./start.sh     모두 시작 (이미 떠 있으면 건너뜀)
 # 종료: ./stop.sh
 #
@@ -33,7 +37,7 @@ echo "[2/3] cg-streamer (project=$PROJECT, 송출 설정은 cgsetup.cfg${CG_UDP:
 if pgrep -f "cg-streamer --run" >/dev/null; then
   echo "  이미 실행 중"
 else
-  nohup ./cg-streamer --run --project="project/$PROJECT.json" ${CG_UDP:+--udp="$CG_UDP"} --gpu --autoplay \
+  nohup ./cg-streamer --run --project="project/$PROJECT.json" ${CG_UDP:+--udp="$CG_UDP"} --gpu --cef:use-angle=gles-egl --autoplay \
     > log/cg-streamer.log 2>&1 &
   disown
   sleep 2

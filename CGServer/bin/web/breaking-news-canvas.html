@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Canvas 속보 자막</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#10151f;color:#eef2fa;font-family:system-ui,'Malgun Gothic',sans-serif}main{max-width:1100px;margin:48px auto;padding:24px}h1{font-size:28px}p{color:#aab5ca}.screen{background:linear-gradient(135deg,#202f45,#09101a);border:1px solid #344258;border-radius:16px;padding:80px 0 40px;overflow:hidden}canvas{display:block;width:100%;height:auto}fieldset{border:1px solid #344258;border-radius:12px;margin-top:24px;padding:20px}textarea{width:100%;min-height:90px;resize:vertical}input,textarea,button{font:inherit}textarea,input[type=text],input[type=number]{background:#1c2637;color:white;border:1px solid #45546c;border-radius:6px;padding:10px}label{display:flex;gap:10px;align-items:center}.options{display:flex;gap:24px;flex-wrap:wrap;margin:18px 0}button{border:0;border-radius:7px;padding:11px 18px;background:#334158;color:white;cursor:pointer}button.primary{background:#e33342}button:hover{filter:brightness(1.15)}.buttons{display:flex;gap:10px;flex-wrap:wrap}small{color:#aab5ca}input[type=number]{width:88px}
+</style>
+<main><h1>속보 자막 · 왼쪽 흐르기</h1><p>HTML Canvas로 렌더링하는 반복 자막입니다. 아래 설정은 바로 반영됩니다.</p><div class="screen"><canvas id="ticker" width="1920" height="160" role="img" aria-label="속보 자막"></canvas></div>
+<fieldset><legend>자막 설정</legend><label for="message">문구</label><textarea id="message">긴급 속보입니다. 새로운 소식이 들어오는 대로 신속하게 전해드리겠습니다.</textarea><div class="options"><label>속도 <input id="speed" type="range" min="10" max="500" value="350"><output id="speedValue">350 px/s</output></label><label>글자 크기 <input id="size" type="number" min="24" max="100" value="64"></label><label>글자색 <input id="color" type="color" value="#ffffff"></label><label>배경색 <input id="background" type="color" value="#10213c"></label><label><input id="badge" type="checkbox" checked> 속보 표시</label></div><div class="buttons"><button class="primary" id="toggle">일시정지</button><button id="restart">처음부터</button><button id="fullscreen">전체화면</button></div><p><small>속도는 원본 캔버스(1920px) 기준입니다. 파일을 더블클릭하면 인터넷 연결 없이 실행됩니다.</small></p></fieldset></main>
+<script>
+'use strict';
+const canvas=document.getElementById('ticker'),ctx=canvas.getContext('2d');
+const ui=Object.fromEntries(['message','speed','speedValue','size','color','background','badge','toggle','restart','fullscreen'].map(id=>[id,document.getElementById(id)]));
+const W=1920,H=160,GAP=180;
+let offset=0,last=null,playing=true;
+function metrics(){const size=Math.min(100,Math.max(24,Number(ui.size.value)||64));ctx.font=`700 ${size}px system-ui, "Malgun Gothic", sans-serif`;const message=ui.message.value.replace(/\s+/g,' ').trim();return{message,width:ctx.measureText(message).width,start:ui.badge.checked?220:0};}
+function draw(){ctx.clearRect(0,0,W,H);ctx.fillStyle=ui.background.value;ctx.fillRect(0,0,W,H);const m=metrics();ctx.save();ctx.beginPath();ctx.rect(m.start,0,W-m.start,H);ctx.clip();ctx.fillStyle=ui.color.value;ctx.textBaseline='middle';ctx.textAlign='left';if(m.message){const period=m.width+GAP;offset=((offset%period)+period)%period;for(let x=m.start+36-offset;x<W;x+=period){ctx.fillText(m.message,x,H/2);}}ctx.restore();if(ui.badge.checked){ctx.fillStyle='#dc2538';ctx.fillRect(0,0,220,H);ctx.fillStyle='#fff';ctx.font='800 68px system-ui, "Malgun Gothic", sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('속보',110,H/2);} }
+function frame(time){if(last!==null&&playing){offset+=Number(ui.speed.value)*Math.min((time-last)/1000,.1);}last=time;draw();requestAnimationFrame(frame);}
+ui.toggle.addEventListener('click',()=>{playing=!playing;last=null;ui.toggle.textContent=playing?'일시정지':'재생';});
+ui.restart.addEventListener('click',()=>{offset=0;last=null;draw();});
+for(const id of ['message','size','badge'])ui[id].addEventListener('input',()=>{offset=0;canvas.setAttribute('aria-label','속보: '+ui.message.value);draw();});
+ui.speed.addEventListener('input',()=>{ui.speedValue.value=ui.speed.value+' px/s';});
+document.addEventListener('visibilitychange',()=>{last=null;});
+ui.fullscreen.addEventListener('click',async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await canvas.requestFullscreen();}catch{ui.fullscreen.textContent='전체화면을 지원하지 않습니다';}});
+canvas.setAttribute('aria-label','속보: '+ui.message.value);requestAnimationFrame(frame);
+if (window.cefQuery) window.cefQuery({request:'ready', onSuccess(){}, onFailure(){}});
+</script></html>

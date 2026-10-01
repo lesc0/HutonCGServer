@@ -1,6 +1,7 @@
 #include "cef_dumper.h"
 
 #include <cstdio>
+#include <cstring>
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -60,12 +61,46 @@ bool CefDumper::Open(const std::string& path, int w, int h, int fps_hint) {
 
   t0_ = std::chrono::steady_clock::now();
   active_ = true;
-  printf("[cef-dump] 캡처 시작: %s (%dx%d, 도착시각 그대로 VFR 기록)\n", path.c_str(), w_, h_);
+  stop_ = false;
+  queue_dropped_ = 0;
+  worker_ = std::thread(&CefDumper::WorkerLoop, this);
+  printf("[cef-dump] 캡처 시작: %s (%dx%d, 인코딩은 별도 스레드, OnPaint는 복사만)\n", path.c_str(), w_, h_);
   return true;
 }
 
-void CefDumper::Drain(bool flush) {
-  avcodec_send_frame(enc_, flush ? nullptr : frame_);
+void CefDumper::PushFrame(const void* bgra) {
+  if (!active_) return;
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now() - t0_).count();
+  std::lock_guard<std::mutex> lk(qmu_);
+  if (queue_.size() >= kQueueMax) { queue_.pop_front(); queue_dropped_++; }   // 인코딩이 못 따라가면 오래된 것부터 버림
+  QueuedFrame f;
+  f.bgra.assign((const uint8_t*)bgra, (const uint8_t*)bgra + (size_t)w_ * h_ * 4);
+  f.ms = ms;
+  queue_.push_back(std::move(f));
+  qcv_.notify_one();
+}
+
+void CefDumper::WorkerLoop() {
+  for (;;) {
+    QueuedFrame f;
+    {
+      std::unique_lock<std::mutex> lk(qmu_);
+      qcv_.wait(lk, [&] { return stop_ || !queue_.empty(); });
+      if (queue_.empty() && stop_) return;
+      f = std::move(queue_.front());
+      queue_.pop_front();
+    }
+    EncodeOne(f);
+  }
+}
+
+void CefDumper::EncodeOne(const QueuedFrame& f) {
+  const uint8_t* src[1] = {f.bgra.data()};
+  int stride[1] = {w_ * 4};
+  sws_scale(sws_, src, stride, 0, h_, frame_->data, frame_->linesize);
+  frame_->pts = f.ms;
+  avcodec_send_frame(enc_, frame_);
   while (avcodec_receive_packet(enc_, pkt_) == 0) {
     av_packet_rescale_ts(pkt_, enc_->time_base, st_->time_base);
     pkt_->stream_index = st_->index;
@@ -74,22 +109,27 @@ void CefDumper::Drain(bool flush) {
   }
 }
 
-void CefDumper::PushFrame(const void* bgra) {
-  if (!active_) return;
-  const uint8_t* src[1] = {(const uint8_t*)bgra};
-  int stride[1] = {w_ * 4};
-  sws_scale(sws_, src, stride, 0, h_, frame_->data, frame_->linesize);
-  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                      std::chrono::steady_clock::now() - t0_).count();
-  frame_->pts = ms;
-  Drain(false);
+void CefDumper::Drain(bool flush) {
+  avcodec_send_frame(enc_, nullptr);
+  while (avcodec_receive_packet(enc_, pkt_) == 0) {
+    av_packet_rescale_ts(pkt_, enc_->time_base, st_->time_base);
+    pkt_->stream_index = st_->index;
+    av_interleaved_write_frame(fmt_, pkt_);
+    av_packet_unref(pkt_);
+  }
 }
 
 void CefDumper::Close() {
   if (active_) {
-    Drain(true);           // 인코더에 남은 프레임 flush
+    {
+      std::lock_guard<std::mutex> lk(qmu_);
+      stop_ = true;
+    }
+    qcv_.notify_one();
+    if (worker_.joinable()) worker_.join();
+    Drain(true);
     av_write_trailer(fmt_);
-    printf("[cef-dump] 캡처 종료\n");
+    printf("[cef-dump] 캡처 종료 (큐 넘쳐서 버린 프레임: %d)\n", queue_dropped_);
   }
   if (sws_) sws_freeContext(sws_);
   if (frame_) av_frame_free(&frame_);

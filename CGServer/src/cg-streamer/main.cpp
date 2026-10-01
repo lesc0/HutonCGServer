@@ -231,7 +231,7 @@ class Client : public CefClient,
                const void* buffer, int w, int h) override {
     if (g_paint_mode != PaintMode::kSoftware) return;
     if (type != PET_VIEW || w != kW || h != kH) return;
-#if 0   // 진단용 OnPaint 덤프 (지금은 꺼둠)
+#if 0   // 진단용 OnPaint 덤프 (지금은 꺼둠: --no-encode 유휴 상태에서만 측정되어 판단 근거로 부적절했음)
     if (g_dumper.Active()) {
       if (std::chrono::steady_clock::now() < g_dump_t_end) g_dumper.PushFrame(buffer);
       else g_dumper.Close();
