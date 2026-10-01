@@ -607,3 +607,69 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
   `/opt/cef/...`는 재빌드할 때(`CEF_ROOT`)와 `bin/libcef.so`가 없어졌을 때의 폴백 용도). `/opt/chromium.org/...`는 별개로 키오스크용 보드 시스템 브라우저.
 - `bin/start.sh`/`bin/stop.sh` 신설: cg-editor + cg-streamer(UDP 송출, 로컬 미리보기 없음) + Chromium 키오스크(cg-editor 화면)를 한 번에 올리고 내림.
   `CG_PROJECT`/`CG_UDP`/`CG_EDITOR_PORT` 환경변수로 기본값(자막프로젝트, 10.10.10.18:1234, 5173) 변경 가능. `.gitignore`에 `!bin/start.sh`/`!bin/stop.sh` 추가.
+
+## 2026-10-01 (이어서 2) — cgsetup.cfg 신설, 가로스크롤 끊김 원인 추적 → 진짜 Mali GPU 가속 활성화
+
+### cg-streamer: cgsetup.cfg 로 송출 설정 분리
+- `bin/cgsetup.cfg` 신규(기본값 없으면 조용히 스킵): `output`(1=HDMI만/로컬 전체화면·인코딩 없음, 2=UDP만·기본, 3=HDMI+UDP 동시),
+  `udp_ip`/`udp_port`, `fps`(인코더 rc·EncodeLoop 틱·CEF 페인트 fps 공통 기본값, 기본 60). `--setup=경로`로 다른 파일 지정 가능,
+  커맨드라인 인자가 항상 cfg보다 우선.
+- `kFps` 상수를 런타임 변수 `g_fps`로 교체(여러 곳에서 치환), `g_paint_fps` 기본값도 `g_fps`에서 파생.
+- `.gitignore`에 `!bin/cgsetup.cfg` 추가(`bin/*` 예외).
+
+### CEF 자체 그리기 속도(SendExternalBeginFrame/EBF) 실험 — 효과 없음, 원인 아니었음
+- 가설: CEF 내부 60Hz 타이머와 EncodeLoop 60Hz 타이머가 서로 어긋나 프레임을 건너뛰어 가로스크롤이 끊겨 보이는 것 아닐까.
+- `CG_EBF`(`-DENABLE_EXTERNAL_BEGIN_FRAME=ON`) 빌드 옵션 추가: `windowless_frame_rate` 대신 `EncodeLoop` 틱에서 `SendExternalBeginFrame()`을
+  직접 호출. 구현 중 두 가지 실버그 발견·수정: (1) `!g_ready` 로딩 대기 중에도 BeginFrame을 계속 보내야 로딩이 끝남(안 그러면 영원히 교착),
+  (2) `SendExternalBeginFrame()`은 UI 스레드에서만 호출 가능 — `CefPostTask(TID_UI, ...)` + 중복 요청 방지 플래그로 수정.
+- 실측 결과: 지터버퍼 효과(`drop=0 under=0`)는 깨끗하게 나왔지만, **체감 끊김은 이전과 동일**("똑같다"/"별 차이 없다" 반복 확인).
+- 결론: EBF는 기능상 정상 동작하지만 가로스크롤 끊김의 원인이 아니었음. 실행 파일(`cg-streamer-ebf`)은 삭제, 소스의 `CG_EBF` 빌드
+  옵션(기본 OFF)만 참고용으로 남김.
+
+### OnPaint 원본 직접 캡처 진단(cef_dumper) — 두 번 수정이 필요했던 측정 함정
+- 목적: RGA/MPP/UDP를 전혀 안 거치고 CEF가 OnPaint로 내놓는 원본 BGRA를 그대로 mp4(VFR, 도착 시각 그대로)로 떠서 끊김이 CEF 자체
+  문제인지 이후 단계 문제인지 구분. `cef_dumper.{h,cpp}` 신규, `main.cpp`에 `--dump-onpaint=`/`--dump-seconds=`/`--page=`(테스트용 다른
+  html 로드) 플래그 추가.
+- 1차 시도(동기 인코딩): OnPaint 콜백 안에서 곧바로 `sws_scale`+`avcodec_send_frame`(libx264)까지 동기 처리 → 8초 캡처에 88장(~11fps)
+  밖에 안 나옴. 사용자가 실제로 영상을 보고 "그렇다(끊겨 보인다)"고 확인.
+- 2차 시도(비동기로 수정 후 재측정): 느린 인코딩이 OnPaint 자체를 블로킹하는 게 측정을 왜곡하는 것 아닌가 싶어, PushFrame은 가벼운
+  메모리 복사만 하고 실제 sws_scale/libx264 인코딩은 별도 워커 스레드(큐+조건변수)로 분리하도록 재작성. 재측정 결과도 ~14~16fps로
+  거의 동일 — `--gpu`/cfg 로드 유무를 바꿔도 변화 없음.
+- **측정 함정 결론**: 이 덤프 테스트는 `--no-encode`(유휴) 모드에서만 돌렸는데, 이 보드(ARM, CPU 주파수 스케일링)는 시스템이 거의 일을
+  안 하면 클럭을 낮춰서 CEF 자체도 덩달아 느려짐 — 즉 "CEF가 느리다"가 아니라 "유휴 상태의 보드가 느리다"를 측정하고 있었음. 실제
+  운영 조건(인코딩 켜짐, MPP/RGA가 CPU/GPU를 바쁘게 돌림)에서 재는 `[stat] paint=.../s` 가 진짜 신뢰할 수 있는 숫자. 진단 코드는
+  `main.cpp`에서 `#if 0`로 비활성화, 코드만 보존(`cef_dumper.*`는 비동기 버전으로 남겨둠).
+
+### 가로스크롤 효과를 캔버스 대신 CSS transform/animation으로 — 시도했으나 퇴행 있어 원복
+- 실측(`bin/web/test-css-scroll.html`로 A/B): 캔버스 매프레임 재그리기 paint≈74~86/s, CSS 버전 paint≈105~120/s(최대 1.6배). 메인
+  스레드 지연에 덜 민감할 거라 기대.
+- `cg-runtime.js`에 `isCssCrawl()`/`syncCrawlOverlays()` 적용(type=text, effect가 직접 crawl/roll, outEffect 없음, runs 없음인 경우만
+  DOM 오버레이로 전환) → 실측 성능은 확보했지만 사용자가 실제로 보고 **글씨체가 달라짐**(캔버스의 kerning/space/textWidth 커스텀
+  로직과 레이어별 외곽선을 `-webkit-text-stroke`로 재현 못함) **레이어 순서 깨짐**(DOM을 body 맨 뒤에 붙여서 항상 캔버스 전체보다
+  위에 뜸 — "속보" 라벨이 가려짐)을 확인 → 전체 되돌림(커밋 `b6d4d2c`).
+- 버그 하나 더 발견(되돌리기 전에 수정까지 했었음, 참고용): `animation-iteration-count:1`+`fill-mode:forwards` 조합은 음수
+  `animation-delay`만 바꿔선 재시작이 안 됨(한 번 끝나면 그대로 멈춤) — 페이지가 루프를 돌면 자막이 한 바퀴만 돌고 멈춰버림.
+  `animationName`을 `none`으로 바꾸고 강제 reflow(`el.offsetWidth`) 후 원래 이름으로 되돌리는 방식으로 고쳐야 재시작됨.
+
+### 가로스크롤 텍스트를 오프스크린 캔버스에 캐싱 — 유지함
+- CSS 전환의 성능 이득(캔버스 재그리기 비용 절감)만 부작용 없이 가져오는 방법: `cg-runtime.js`에 `cachedTextCanvas()` 추가 —
+  텍스트/스타일 시그니처가 안 바뀌면 오프스크린 캔버스에 캐싱된 비트맵을 `drawImage()`로 위치만 옮겨 찍음(기존 `drawText()` 그대로
+  재사용하므로 글씨체/레이어 문제 없음). 위치 계산(`v.x`)은 기존처럼 매 프레임 그대로 해서 "멈추는" 버그도 구조적으로 발생 안 함.
+- 실측: paint 74~86/s → 108~122/s. 커밋 `5b06d94`.
+
+### 근본 원인 발견: `--gpu`로도 사실은 SwiftShader(소프트웨어) 폴백 상태였음
+- 위 방법들을 다 적용해도 "체감은 똑같다"는 피드백이 반복 → "이미 공급 과잉(`under=0`)인 상태에서 공급을 더 늘리는" 시도였을 뿐
+  근본 원인이 아니었다고 판단, 접근 전환.
+- 기본 실행(`--gpu` 없이)은 `main.cpp`에서 `disable-gpu`/`disable-gpu-compositing`이 항상 붙어 CEF가 완전 소프트웨어 렌더링으로
+  떨어짐(paint≈11fps) → `--gpu`로 이를 끄면 paint 75~120fps로 개선되는 걸 먼저 확인했었음. 그런데 실제 GPU 프로세스 커맨드라인을
+  보니 `--use-gl=angle --use-angle=swiftshader-webgl`로 떠 있었음 — **`--gpu`를 줘도 ANGLE이 SwiftShader로 폴백한 상태**였을 뿐,
+  진짜 GPU 가속이 아니었음.
+- `cef_server_build.md`(이 보드의 커스텀 CEF 130이 Mali DDK 패치 포함해서 빌드된 문서) 재확인 — 5단계에 정확한 사용법이 이미
+  적혀 있었음: `--cef:use-angle=gles-egl`. `--use-gl=egl`(ANGLE 안 거치는 순정 EGL)은 이 CEF 빌드에 아예 컴파일 안 되어 있어
+  `gl_factory.cc` 에러로 거부됨, Vulkan 백엔드도 이 보드의 Mali 드라이버(`libmali-valhall-g610-g13p0-x11-gbm`, Vulkan ICD 없음)로는
+  불가 — `gles-egl`이 이 커스텀 빌드가 제공하는 유일한 진짜 하드웨어 경로.
+- `--cef:use-angle=gles-egl` 적용 결과: GPU 프로세스가 크래시/재시작 없이 한 번에 뜨고, **`paint`가 설정 fps(60)에 정확히 맞춰지며
+  `drop=0`**(SwiftShader는 75~120fps 과공급 + 지속적 drop). 사용자 확인: 가로스크롤 끊김 해소, **CPU 사용량 체감 절반으로 감소**.
+- `bin/start.sh`에 `--gpu --cef:use-angle=gles-egl` 기본 적용. 커밋 `e9ea8fe`.
+- 교훈: 증상(끊김)을 고치려고 여러 렌더링 기법(EBF/CSS/캐싱)을 바꿔치기하기 전에, 먼저 "진짜 GPU를 쓰고 있는지"부터 확인했어야
+  시간을 아꼈을 것. `ps aux`로 gpu-process 커맨드라인의 `--use-gl`/`--use-angle` 값을 확인하는 게 가장 빠른 1차 점검 포인트.
