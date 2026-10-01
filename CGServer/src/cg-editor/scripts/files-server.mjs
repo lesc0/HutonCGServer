@@ -8,6 +8,7 @@
 //   GET  /projects/<이름>                    프로젝트 JSON
 //   PUT  /projects/<이름>                    프로젝트 저장 (data: 미디어는 bin/media 로 풀고 ../media/<파일> 로 바꿈)
 //   DELETE /projects/<이름>                  프로젝트 삭제 (bin/media 의 미디어는 지우지 않음)
+//   GET  /fonts, /fonts/<파일>               bin/fonts 의 폰트 목록(+송출 엔진용 fonts.css 갱신) / 폰트 파일
 //
 //   /ctl/*  : cg-streamer 의 HTTP 컨트롤 포트(기본 127.0.0.1:5555)로 그대로 중계.
 //             브라우저가 직접 그 포트를 부르면 CORS 로 막히므로 같은 오리진인 이 서버를 거친다.
@@ -27,6 +28,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../../..');                       // 저장소 루트 (CGServer)
 const MEDIA_DIR = path.resolve(process.env.CG_MEDIA_DIR || path.join(root, 'bin/media'));
 const PROJECT_DIR = path.resolve(process.env.CG_PROJECT_DIR || path.join(root, 'bin/project'));
+const FONT_DIR = path.resolve(process.env.CG_FONT_DIR || path.join(root, 'bin/fonts'));
 const PORT = Number(process.env.CG_FILES_PORT || 8081);
 const HOST = process.env.CG_FILES_HOST || '127.0.0.1';
 const CTL_PORT = Number(process.env.CG_CTL_PORT || 5555);
@@ -62,6 +64,38 @@ function cors(req, res) {
       res.setHeader('Access-Control-Expose-Headers', 'Content-Range,Accept-Ranges,Content-Length');
     }
   } catch { /* 잘못된 Origin 은 CORS 헤더를 주지 않는다 */ }
+}
+
+// ---- 폰트 (bin/fonts): 파일을 넣으면 에디터 글꼴 목록과 송출 엔진(fonts.css)에 자동 반영 ----
+const FONT_TYPES = {ttf: 'font/ttf', otf: 'font/otf', woff: 'font/woff', woff2: 'font/woff2'};
+const FONT_FORMAT = {ttf: 'truetype', otf: 'opentype', woff: 'woff', woff2: 'woff2'};
+// 파일 이름 -> 글꼴: "이름-Bold.ttf" 는 "이름" 글꼴의 Bold, "-Italic"/"-BoldItalic" 도 마찬가지, 나머지는 파일 이름 그대로 글꼴 이름
+function fontInfo(file) {
+  const base = file.slice(0, file.length - path.extname(file).length);
+  const m = /^(.+?)[-_ ]?(BoldItalic|BoldOblique|Bold|Italic|Oblique|Regular)$/i.exec(base);
+  if (!m) return {file, family: base, weight: 400, style: 'normal'};
+  const s = m[2].toLowerCase();
+  return {file, family: m[1], weight: s.startsWith('bold') ? 700 : 400, style: /italic|oblique/.test(s) ? 'italic' : 'normal'};
+}
+async function listFonts() {
+  const entries = await fsp.readdir(FONT_DIR, {withFileTypes: true}).catch(() => []);
+  return entries.filter((e) => e.isFile() && FONT_TYPES[extOf(e.name)] && safeName(e.name)).map((e) => fontInfo(e.name))
+    .sort((a, b) => a.family.localeCompare(b.family, 'ko') || a.weight - b.weight || a.style.localeCompare(b.style));
+}
+// 송출 엔진(player.html, file://)이 읽는 fonts.css. 폰트 목록을 읽을 때마다 바뀌었으면 새로 쓴다.
+const fontCssText = (fonts) => fonts.map((f) => `@font-face{font-family:"${f.family.replace(/["\\]/g, '')}";src:url("${encodeURIComponent(f.file)}") format("${FONT_FORMAT[extOf(f.file)]}");font-weight:${f.weight};font-style:${f.style};font-display:block}`).join('\n') + '\n';
+async function writeFontsCss(fonts) {
+  const css = fontCssText(fonts), file = path.join(FONT_DIR, 'fonts.css');
+  if ((await fsp.readFile(file, 'utf8').catch(() => null)) !== css) await fsp.writeFile(file, css);
+}
+async function serveFont(req, res, name) {
+  if (!safeName(name) || !FONT_TYPES[extOf(name)]) return fail(res, 404, 'not found');
+  const file = path.join(FONT_DIR, name);
+  const st = await fsp.stat(file).catch(() => null);
+  if (!st || !st.isFile()) return fail(res, 404, 'not found');
+  res.writeHead(200, {'Content-Type': FONT_TYPES[extOf(name)], 'Content-Length': st.size, 'Cache-Control': 'no-cache', 'ETag': `"${st.size}-${Math.round(st.mtimeMs)}"`});
+  if (req.method === 'HEAD') return res.end();
+  fs.createReadStream(file).pipe(res);
 }
 
 const json = (res, code, body) => {
@@ -172,6 +206,10 @@ const server = http.createServer(async (req, res) => {
       if (seg.length === 1) return json(res, 200, {dir: MEDIA_DIR, files: await listMedia(url.searchParams.get('kind') || '')});
       if (seg.length === 2) return serveMedia(req, res, seg[1]);
     }
+    if (seg[0] === 'fonts' && ['GET', 'HEAD'].includes(req.method)) {
+      if (seg.length === 1) { const fonts = await listFonts(); await writeFontsCss(fonts).catch(() => {}); return json(res, 200, {dir: FONT_DIR, fonts}); }
+      if (seg.length === 2) return serveFont(req, res, seg[1]);
+    }
     if (seg[0] === 'projects') {
       if (seg.length === 1 && req.method === 'GET') {
         const entries = (await fsp.readdir(PROJECT_DIR, {withFileTypes: true}).catch(() => [])).filter((e) => e.isFile() && /\.json$/i.test(e.name));
@@ -218,6 +256,8 @@ const server = http.createServer(async (req, res) => {
 
 fs.mkdirSync(MEDIA_DIR, {recursive: true});
 fs.mkdirSync(PROJECT_DIR, {recursive: true});
+fs.mkdirSync(FONT_DIR, {recursive: true});
+listFonts().then(writeFontsCss).catch(() => {});
 server.listen(PORT, HOST, () => {
-  console.log(`[files] http://${HOST}:${PORT}  media=${MEDIA_DIR}  project=${PROJECT_DIR}`);
+  console.log(`[files] http://${HOST}:${PORT}  media=${MEDIA_DIR}  project=${PROJECT_DIR}  fonts=${FONT_DIR}`);
 });

@@ -30,6 +30,11 @@ async function call(path: string, init?: RequestInit) {
   return data;
 }
 
+export type FontFace = {file: string; family: string; weight: number; style: string};
+// bin/fonts 의 폰트 목록(파일 서버). 폰트 파일은 파일 서버가 /fonts/<파일> 로 내려준다.
+export const listFonts = async (): Promise<FontFace[]> => (await call('/fonts')).fonts;
+export const fontUrl = (file: string) => `${filesBase()}/fonts/${encodeURIComponent(file)}`;
+
 export const listMedia = async (kind?: MediaFile['kind']): Promise<{dir: string; files: MediaFile[]}> => call('/media' + (kind ? '?kind=' + kind : ''));
 export const listProjectFiles = async (): Promise<{dir: string; projects: ProjectFile[]}> => call('/projects');
 export const loadProjectFile = async (name: string): Promise<unknown> => call('/projects/' + encodeURIComponent(name));

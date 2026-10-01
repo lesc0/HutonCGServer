@@ -2,6 +2,7 @@ import {Item,Run,clockText} from './model';
 type Glyph={char:string;width:number;font:string;fill:string;size:number;rotate:number;start:number;underline:boolean};type Line={chars:Glyph[];width:number;height:number};
 // 글자 폭/줄바꿈 계산은 비싸므로 (내용+스타일) 키로 결과를 캐시한다. 시계/타이머는 text 가 바뀔 때만 다시 계산된다.
 const layoutCache=new Map<string,Line[]>(),widthCache=new Map<string,number>();
+export const clearTextCache=()=>{layoutCache.clear();widthCache.clear()};
 const measure=(c:CanvasRenderingContext2D,font:string,char:string)=>{const k=font+'|'+char;let w=widthCache.get(k);if(w===undefined){c.font=font;w=c.measureText(char).width;if(widthCache.size>5000)widthCache.clear();widthCache.set(k,w)}return w};
 function layoutLines(c:CanvasRenderingContext2D,item:Item,text:string,scale:number):Line[]{
 const key=JSON.stringify([text,item.runs,item.size,item.italic,item.bold,item.family,item.space,item.kerning,item.textWidth,item.w,item.align,item.cRotate,item.fill,item.underline]);const hit=layoutCache.get(key);if(hit)return hit;

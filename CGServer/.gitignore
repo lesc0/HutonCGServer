@@ -10,6 +10,8 @@ bin/*
 bin/media/*
 !bin/media/.gitkeep
 !bin/project/
+!bin/fonts/
+bin/fonts/fonts.css
 bin/web/girsday.mp4
 lib/*
 !lib/*.tar.gz

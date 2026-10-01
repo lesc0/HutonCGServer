@@ -433,12 +433,28 @@ function rangeStart() {
 }
 function stopMain() { main.playing = false; main.visible = false; main.time = 0; dirty = true; }
 
+// bin/fonts 의 폰트(player.html 이 ../fonts/fonts.css 로 등록)는 캔버스에 그리기 전에 미리 읽어 둬야 처음부터 제 글꼴로 나온다.
+// 시스템 폰트·없는 폰트는 load() 가 바로 끝나므로 부담이 없다.
+async function preloadFonts(proj) {
+  const fams = new Set();
+  for (const p of proj.pages) for (const i of p.items) {
+    if (!['text', 'clock', 'timer'].includes(i.type)) continue;
+    if (i.family) fams.add(i.family);
+    for (const r of i.runs || []) if (r.family) fams.add(r.family);
+  }
+  const jobs = [];
+  for (const f of fams) for (const style of ['', 'italic ']) for (const weight of ['', 'bold '])
+    jobs.push(document.fonts.load(`${style}${weight}16px ${JSON.stringify(f)}`).catch(() => {}));
+  await Promise.all(jobs);
+}
+
 // 디스크의 project 파일을 다시 읽어 적용한다 (에디터에서 저장한 내용을 반영).
 // --autoplay 로 띄운 엔진이면 처음 실행 때처럼 바로 재생 시작, 아니면(수동 제어) 정지 상태로 1페이지에 둔다.
 async function reloadProject() {
   if (!window.cefQuery) return false;
   let next;
   try { next = fixProject(JSON.parse(await q('load'))); } catch (e) { console.error('[cg] reload 실패:', e); return false; }
+  await preloadFonts(next);
   project = next;
   stamps = [idleChannel(), idleChannel()];
   globalCh = idleChannel();
@@ -640,6 +656,7 @@ fit();
     return;
   }
   // 폰트 -> 이미지 로딩 후 첫 프레임 (기존 player.html 과 같은 절차)
+  await preloadFonts(project);
   await document.fonts.ready;
   const srcs = new Set();
   for (const p of project.pages) for (const i of p.items) if (i.type === 'image' && i.src) srcs.add(i.src);
