@@ -5,10 +5,10 @@ import {ctlStatus,ctlCommand,ctlSwitch,listProjectFiles,CtlStatus,ProjectFile} f
 export function useStreamControl(onError: (s: string) => void) {
  const [status,setStatus]=useState<CtlStatus|null>(null),[online,setOnline]=useState(false),[busy,setBusy]=useState(false),[gotoPage,setGotoPage]=useState(1);
  const [projects,setProjects]=useState<ProjectFile[]>([]),[selected,setSelected]=useState('');
- useEffect(()=>{let stop=false;const poll=async()=>{try{const s=await ctlStatus();if(!stop){setStatus(s);setOnline(true)}}catch{if(!stop){setOnline(false);setStatus(null)}}};poll();const id=setInterval(poll,1500);return()=>{stop=true;clearInterval(id)}},[]);
+ useEffect(()=>{let stop=false;const poll=async()=>{if(document.hidden)return;try{const s=await ctlStatus();if(!stop){setStatus(s);setOnline(true)}}catch{if(!stop){setOnline(false);setStatus(null)}}};poll();const id=setInterval(poll,1500);return()=>{stop=true;clearInterval(id)}},[]);
  const refreshProjects=async()=>{try{const d=await listProjectFiles();setProjects(d.projects);if(!selected&&d.projects.length)setSelected(d.projects[0].name)}catch(e){onError((e as Error).message)}};
  // 처음 뜰 때 파일 서버가 아직 재시작 중이면 조용히 실패할 수 있어서, 목록이 빌 때까지 자동 재시도한다("목록 새로고침"은 수동 재시도용).
- useEffect(()=>{if(projects.length)return;let stop=false;const tryLoad=async()=>{try{const d=await listProjectFiles();if(!stop&&d.projects.length){setProjects(d.projects);setSelected(s=>s||d.projects[0].name)}}catch{/* 조용히 재시도 */}};void tryLoad();const id=setInterval(tryLoad,3000);return()=>{stop=true;clearInterval(id)}},[projects.length]);
+ useEffect(()=>{if(projects.length)return;let stop=false;const tryLoad=async()=>{if(document.hidden)return;try{const d=await listProjectFiles();if(!stop&&d.projects.length){setProjects(d.projects);setSelected(s=>s||d.projects[0].name)}}catch{/* 조용히 재시도 */}};void tryLoad();const id=setInterval(tryLoad,3000);return()=>{stop=true;clearInterval(id)}},[projects.length]);
  // busy 는 React 18+ 에서 언마운트 후 setState 해도 안전(조용히 무시)하므로 별도 mounted 가드를 두지 않는다
  // (예전의 mounted ref 가드는 Fast Refresh/StrictMode 이중 실행에서 false 로 고정돼버려 그 다음부터 모든 버튼이 영구히 disable 되는 버그가 있었음).
  const send=async(cmd:string,arg?:number|string)=>{setBusy(true);try{await ctlCommand(cmd,arg)}catch(e){onError((e as Error).message)}finally{setBusy(false)}};

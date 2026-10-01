@@ -72,14 +72,14 @@ const json = (res, code, body) => {
 const fail = (res, code, error) => json(res, code, {error});
 
 async function listMedia(kind) {
-  const out = [];
-  for (const e of await fsp.readdir(MEDIA_DIR, {withFileTypes: true}).catch(() => [])) {
-    if (!e.isFile()) continue;
-    const t = TYPES[extOf(e.name)];
-    if (!t || (kind && t.kind !== kind)) continue;
+  const entries = (await fsp.readdir(MEDIA_DIR, {withFileTypes: true}).catch(() => [])).filter((e) => {
+    const t = e.isFile() && TYPES[extOf(e.name)];
+    return t && (!kind || t.kind === kind);
+  });
+  const out = await Promise.all(entries.map(async (e) => {
     const st = await fsp.stat(path.join(MEDIA_DIR, e.name));
-    out.push({name: e.name, kind: t.kind, size: st.size, updated: st.mtimeMs});
-  }
+    return {name: e.name, kind: TYPES[extOf(e.name)].kind, size: st.size, updated: st.mtimeMs};
+  }));
   return out.sort((a, b) => a.name.localeCompare(b.name, 'ko'));
 }
 
@@ -89,7 +89,9 @@ function serveMedia(req, res, name) {
   if (!safeName(name) || !t) return fail(res, 404, '지원하지 않는 파일입니다.');
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) return fail(res, 404, '파일이 없습니다: ' + name);
-    const headers = {'Content-Type': t.mime, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-cache'};
+    const etag = `"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`;
+    const headers = {'Content-Type': t.mime, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-cache', 'ETag': etag};
+    if (!req.headers.range && req.headers['if-none-match'] === etag) { res.writeHead(304, {'ETag': etag, 'Cache-Control': 'no-cache'}); return res.end(); }
     const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
     if (m && (m[1] || m[2])) {
       let start = m[1] ? Number(m[1]) : Math.max(0, st.size - Number(m[2])), end = m[1] && m[2] ? Number(m[2]) : st.size - 1;
@@ -123,7 +125,7 @@ async function extractMedia(node) {
         const buf = Buffer.from(m[2], 'base64');
         const name = 'import-' + crypto.createHash('sha1').update(buf).digest('hex').slice(0, 12) + '.' + ext;
         const file = path.join(MEDIA_DIR, name);
-        if (!fs.existsSync(file)) await fsp.writeFile(file, buf);
+        if (!(await fsp.access(file).then(() => true, () => false))) await fsp.writeFile(file, buf);
         v[k] = '../media/' + name;
         count++;
       } else await walk(x);
@@ -172,12 +174,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (seg[0] === 'projects') {
       if (seg.length === 1 && req.method === 'GET') {
-        const out = [];
-        for (const e of await fsp.readdir(PROJECT_DIR, {withFileTypes: true}).catch(() => [])) {
-          if (!e.isFile() || !/\.json$/i.test(e.name)) continue;
+        const entries = (await fsp.readdir(PROJECT_DIR, {withFileTypes: true}).catch(() => [])).filter((e) => e.isFile() && /\.json$/i.test(e.name));
+        const out = await Promise.all(entries.map(async (e) => {
           const st = await fsp.stat(path.join(PROJECT_DIR, e.name));
-          out.push({name: e.name.replace(/\.json$/i, ''), size: st.size, updated: st.mtimeMs});
-        }
+          return {name: e.name.replace(/\.json$/i, ''), size: st.size, updated: st.mtimeMs};
+        }));
         return json(res, 200, {dir: PROJECT_DIR, projects: out.sort((a, b) => b.updated - a.updated)});
       }
       if (seg.length === 2) {
@@ -200,7 +201,7 @@ const server = http.createServer(async (req, res) => {
           if (!project || project.format !== 'cg-editor' || !Array.isArray(project.pages)) return fail(res, 400, 'CG 편집기 프로젝트가 아닙니다.');
           const extracted = await extractMedia(project);
           const tmp = target + '.tmp-' + process.pid;               // 쓰다가 끊겨도 기존 파일이 깨지지 않게 임시 파일 후 교체
-          await fsp.writeFile(tmp, JSON.stringify(project, null, 2));
+          await fsp.writeFile(tmp, JSON.stringify(project));
           await fsp.rename(tmp, target);
           const st = await fsp.stat(target);
           return json(res, 200, {name: file.replace(/\.json$/i, ''), updated: st.mtimeMs, extractedMedia: extracted, project});
