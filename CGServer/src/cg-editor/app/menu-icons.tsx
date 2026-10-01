@@ -5,7 +5,7 @@ import {FilePlus,FilePlus2,FolderOpen,Save,SaveAll,ImageDown,Undo2,Redo2,Copy,Cl
 type Icon=ComponentType<{size?:number;strokeWidth?:number}>;
 const icons:Record<string,Icon>={
   // 파일
-  '새 프로젝트':FilePlus,'프로젝트 열기':FolderOpen,'프로젝트 저장':Save,'프로젝트 다른 이름으로 저장':SaveAll,'PNG 내보내기':ImageDown,
+  '새 프로젝트':FilePlus,'프로젝트 열기':FolderOpen,'프로젝트 저장':Save,'다른 이름으로 저장':SaveAll,'PNG 내보내기':ImageDown,
   // 편집
   '실행 취소':Undo2,'다시 실행':Redo2,'복사':Copy,'붙여넣기':ClipboardPaste,'잘라내기':Scissors,'삭제':Trash2,'모두 선택':BoxSelect,'텍스트 영역 맞춤':Scan,'그룹':Group,'그룹 해제':Ungroup,
   // 보기
