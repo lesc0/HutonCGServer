@@ -749,3 +749,19 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
 - rect/ellipse 선택 시 Attributes 탭 가운데 열 아래에 **Shape** 블록 표시(`attributes.tsx`의 `ShapeProps`): Radius(사각형, 다각형이 아닐 때) · Shape(None/다각형 12종) ·
   Gradient(None/Linear/Radial, Linear 각도, 색 2~3개 + 추가/제거 버튼) · Stripe(체크, 각도·굵기·Alpha %·색). 값은 `gradient`/`stripe` 문자열로 다시 조합해 저장(알파 있는 색은 알파 유지).
 - 주의: 그라데이션이 켜져 있으면 `fill`(오른쪽 Color 창의 F)을 바꿔도 그라데이션이 우선이라 보이지 않음 → Gradient 를 None 으로 끄거나 Shape 블록의 색을 바꿔야 함.
+
+### Shape 카탈로그 정리 (한눈에 보이게)
+- 견본 수를 약 400 → 약 160개로 줄임(색 변형 축소, 중복 제거; Rounded Rect/Framed Box/그라데이션/Custom 종류는 모두 유지).
+- 격자 표시: Shape 탭 전용 `.shape-stylegrid`(4열, 1650px↑ 5열, 칸 높이 56px 고정). 이전엔 정사각형 견본이 행 높이에 잡히지 않아 줄끼리 겹치고 라벨(Box/Circle/Rounded Rect/Framed Box/Custom)이 가려졌음.
+  열이 패널 폭을 넘지 않도록 `minmax(0,1fr)` + 버튼 `min-width:0;overflow:hidden`.
+- 긴 막대 견본은 칸 폭의 80%, 높이 4~20px 로 표시하고 정사각/세로 도형은 비율을 유지(`page.tsx`의 견본 미리보기).
+- 헤드리스 Chromium(CDP)으로 실제 화면을 캡처해 확인하는 방법: `--remote-debugging-port` 로 띄우고 Shape 탭 클릭 후 `Page.captureScreenshot`.
+
+### Style Catalog > Page 탭에 기본 템플릿 13종 추가 (문자발생기 자주 쓰는 구성)
+- `app/templates.ts`(`builtinTemplates`)를 새로 만들고, Page 탭에 프로젝트 사용자 템플릿(`project.templates`) **앞에** 표시. 클릭하면 현재 페이지 내용이 템플릿으로 교체(기존 동작, 이름은 유지).
+  하단 자막 1줄 / 하단 자막 2줄(제목+내용) / 인터뷰 이름표 / 뉴스 속보 / 하단 가로 스크롤(crawl) / 타이틀(중앙) / 로고+시계 / 스코어보드 /
+  정보 박스(우측, 날씨) / 순위표 5위 / 자막방송(대사 2줄) / 장소+LIVE / 공지 박스(중앙). 띠는 wipe, 글자는 fade 인/아웃 기본 적용, 둥근 모서리(`radius`) 활용.
+- 표시: 2열 격자(`.page-stylegrid`), 썸네일 높이 64px 고정(이전 Shape 탭과 같은 행 겹침 방지), 썸네일 글자 배율 `Thumb`의 `k` 매개변수(카탈로그에서는 0.5).
+- 헤드리스 Chromium 캡처로 2열 격자·이름·썸네일 표시 확인.
+- 운영 메모: 이 보드는 cg-streamer(송출 중 CPU ~200%) + 메모리 3.9GB 로 `tsc`가 3분 이상 걸리고 메모리 부족(exit 137)으로 에디터/파일 서버까지 같이 죽을 수 있음.
+  타입체크/빌드는 송출을 멈춘 상태에서 하는 것이 안전. (`curl -X POST http://127.0.0.1:5555/quit` 로 cg-streamer 정지)
