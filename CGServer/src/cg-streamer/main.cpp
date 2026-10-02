@@ -711,9 +711,11 @@ static int PreviewRun() {
       const Atom mwm = XInternAtom(dpy, "_MOTIF_WM_HINTS", False);
       long mh[5] = {2, 0, 0, 0, 0};   // flags=MWM_HINTS_DECORATIONS, decorations=0 (장식 없음)
       XChangeProperty(dpy, win, mwm, mwm, 32, PropModeReplace, reinterpret_cast<unsigned char*>(mh), 5);
-      Atom st[3] = {XInternAtom(dpy, "_NET_WM_STATE_ABOVE", False), XInternAtom(dpy, "_NET_WM_STATE_SKIP_TASKBAR", False),
-                    XInternAtom(dpy, "_NET_WM_STATE_SKIP_PAGER", False)};
-      XChangeProperty(dpy, win, XInternAtom(dpy, "_NET_WM_STATE", False), XA_ATOM, 32, PropModeReplace, reinterpret_cast<unsigned char*>(st), 3);
+      // FULLSCREEN: 창 관리자는 일반 창을 패널(작업 영역) 안으로 밀어 넣어 위쪽에 데스크탑/패널이 보이고 아래가 잘린다 -> 전체화면으로 모니터에 꽉 채움
+      // (창을 만든 위치(송출 모니터)가 속한 모니터에서 전체화면이 된다)
+      Atom st[4] = {XInternAtom(dpy, "_NET_WM_STATE_FULLSCREEN", False), XInternAtom(dpy, "_NET_WM_STATE_ABOVE", False),
+                    XInternAtom(dpy, "_NET_WM_STATE_SKIP_TASKBAR", False), XInternAtom(dpy, "_NET_WM_STATE_SKIP_PAGER", False)};
+      XChangeProperty(dpy, win, XInternAtom(dpy, "_NET_WM_STATE", False), XA_ATOM, 32, PropModeReplace, reinterpret_cast<unsigned char*>(st), 4);
     }
     XMapWindow(dpy, win);
     XSync(dpy, False);
