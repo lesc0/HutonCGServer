@@ -374,10 +374,9 @@ function drawItem(c, item, time, page) {
   c.save();
   c.globalAlpha *= item.opacity * v.opacity;
   const mo = moveOffset(item, time);
-  let tx = item.x + v.x + mo.x, ty = item.y + v.y + mo.y;
-  // crawl/roll 은 미리 그려 둔 글자 판을 drawImage 로 옮기는데, 소수점 위치면 매 프레임 보간이 달라져 글자 가장자리가 일렁이고 튀어 보인다 -> 정수 픽셀로 스냅.
-  if (state.effect === 'crawl' || state.effect === 'roll') { tx = Math.round(tx); ty = Math.round(ty); }
-  c.translate(tx, ty);
+  // 주의: crawl/roll 위치를 정수 픽셀로 스냅하지 않는다. 느린 스크롤(예: 3.66px/프레임)은 정수로 자르면 3,4,3,4 로 번갈아 움직여 오히려 규칙성이 나빠지고
+  // (단말에서 송출 영상으로 측정: 튄 프레임 7.4% -> 9.7%), 소수점 위치의 보간이 더 부드럽다.
+  c.translate(item.x + v.x + mo.x, item.y + v.y + mo.y);
   c.rotate((item.rotation + v.rotation) * Math.PI / 180);
   c.scale(v.scaleX, v.scaleY);
   if (v.clip) { v.clip(c); c.clip(); }
