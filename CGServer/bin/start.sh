@@ -67,7 +67,7 @@ else
   if read -r gx gy gw gh < .run/display-editor.geom 2>/dev/null && [ -n "${gh:-}" ]; then
     KIOSK_POS=(--window-position="$gx,$gy" --window-size="$gw,$gh")
   fi
-  DISPLAY="$DISPLAY" nohup "$CHROMIUM" --kiosk "${KIOSK_POS[@]}" --noerrdialogs --disable-infobars --no-first-run \
+  DISPLAY="$DISPLAY" setsid nohup "$CHROMIUM" --kiosk "${KIOSK_POS[@]}" --noerrdialogs --disable-infobars --no-first-run \
     --user-data-dir="$KIOSK_PROFILE" "http://localhost:$PORT" \
     > log/chromium-kiosk.log 2>&1 &
   echo $! > "$CHROMIUM_PIDF"

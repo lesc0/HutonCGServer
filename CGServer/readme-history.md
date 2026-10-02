@@ -148,6 +148,7 @@
 - `start.sh`: 키오스크 Chromium 을 `display-editor.geom` 위치/크기(`--window-position/--window-size`)로 띄움. `cgsetup.cfg` 에 `editor_display`, `output_display` 추가(다른 포트로 바꾸려면 여기만 수정).
 - 검증: 가짜 `xrandr` 로 두 대(1920x1080 + 1024x600 → 화면 2944x1080, HDMI-1 `0 0 1920 1080`, HDMI-2 `1920 0 1024 600`)와 한 대 경로의 호출/좌표를 확인. 단말에서는 한 대 상태로 동작 확인(미리보기 1024x600, 음성 연결된 HDMI 카드). 이후 사용자가 두 대를 연결해 실제로 확인: HDMI-1(1024x600) `0,0`, HDMI-2(1920x1080) `1024,0`, X 화면 2944x1080. X 창 목록에서 에디터(`Huton CG Editor` Chromium)가 `1024x600+0+0`(HDMI-1), 송출 미리보기가 `1920x1080+1024+0`(HDMI-2), 로컬 음성은 `rockchiphdmi1`(HDMI-2 카드).
 - 두 대 연결 직후 모두 송출 화면으로 보인 원인 2가지: (1) 모니터를 꽂은 뒤 `display.sh` 가 다시 실행되지 않아 두 출력이 `0,0` 에 겹쳐 있었음 -> `stop.sh`/`start.sh` 또는 Reload/Switch 로 배치 재계산. (2) **키오스크(에디터) Chromium 이 아예 안 떠 있었음**: 프로필 폴더 `/tmp/cg-editor-kiosk` 가 root 소유라 pi 계정에서 `process_singleton ... Permission denied` -> `start.sh` 의 `KIOSK_PROFILE` 을 `/tmp/cg-editor-kiosk-$(id -un)`(사용자별)로 변경. root 로 키오스크를 띄운 적이 있으면 같은 문제가 생길 수 있음.
+- 이후 "HDMI-1 이 데스크톱 화면": 키오스크 Chromium 이 ssh 세션 안에서 띄워져 세션이 끝날 때 같이 사라진 것(창 목록에 `Huton CG Editor` 없음). `setsid nohup` 으로 세션과 분리해 다시 띄우고 별도 ssh 접속에서 30초 뒤에도 창이 `1024x600+0+0` 에 있음을 확인. `start.sh` 의 Chromium 실행에도 `setsid` 추가. 주의: `pgrep chromium` 은 프로세스 이름이 `chrome` 이라 0 으로 나오므로 확인은 X 창 목록(`xwininfo -root -tree | grep 'Huton CG Editor'`)으로.
 - 참고: `src/cg-editor/AGENTS.md`, `CLAUDE.md` 는 사용자가 직접 삭제한 것(이 커밋 `38e9714` 에 삭제가 함께 올라감). 이를 실수로 보고 `8b2f6a4` 에서 복원했다가 다시 삭제함. 앞으로는 `git add` 에 파일을 명시.
 
 ## 2026-10-01 (이어서 3) — 업스트림 병합, start.sh 기본 production, 패널 배치, stop.sh 보강
