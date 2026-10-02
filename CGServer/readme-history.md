@@ -140,6 +140,15 @@
 - 개체 하나만 흘리려면 Still 모드에서 그 개체의 Effects 를 Crawl/Roll 로 지정(`가로스크롤-예제` 방식).
 - 도움말(사용 방법)에 위 내용을 한 문단으로 추가.
 
+### 13) 모니터 두 대: HDMI-1 = 에디터, HDMI-2 = 송출 화면
+
+- 요청: HDMI-1 은 에디터(키오스크), HDMI-2 는 송출(미리보기) 출력. 기존 `display.sh`(10번대 항목)는 연결된 **첫 출력 하나만** 설정하고 X 화면 크기를 그 하나에 맞춰서 두 대 배치를 깨뜨릴 수 있었음(이 단말은 확인 시점마다 모니터가 한 대만 연결되어 있어 실제 두 대 상태는 못 봄).
+- `bin/display.sh` 재작성: 연결된 출력과 권장(첫) 모드를 읽어, **두 대**(`editor_display`=HDMI-1, `output_display`=HDMI-2 모두 연결)면 HDMI-1 을 왼쪽 `0,0`, HDMI-2 를 그 오른쪽에 나란히 두고 X 화면을 합친 크기로 설정. **한 대**면 그 모니터를 에디터/송출이 같이 사용. 결과 영역을 `bin/.run/display-editor.geom`, `display-output.geom`("x y w h")에 기록. 연결 안 된 출력은 끔.
+- cg-streamer: 미리보기 창을 `display-output.geom` 위치/크기(송출 모니터)에 만듦(없으면 화면 전체). reload/Switch/`POST /display` 때 영역(위치·크기)이 달라지면 창을 다시 만듦. 로컬 음성 `audio_out=auto` 는 `output_display` 모니터의 소리 카드(HDMI-A-N → rockchiphdmi(N-1))를 우선, 그 모니터가 없으면 연결된 첫 HDMI.
+- `start.sh`: 키오스크 Chromium 을 `display-editor.geom` 위치/크기(`--window-position/--window-size`)로 띄움. `cgsetup.cfg` 에 `editor_display`, `output_display` 추가(다른 포트로 바꾸려면 여기만 수정).
+- 검증: 가짜 `xrandr` 로 두 대(1920x1080 + 1024x600 → 화면 2944x1080, HDMI-1 `0 0 1920 1080`, HDMI-2 `1920 0 1024 600`)와 한 대 경로의 호출/좌표를 확인. 단말에서는 한 대 상태로 동작 확인(미리보기 1024x600, 음성 연결된 HDMI 카드). **실제 모니터 두 대 연결 상태는 미확인**.
+- 실수 정정: 이 커밋(`38e9714`)에 `git add -A src` 로 작업 폴더에서 이미 지워져 있던 `src/cg-editor/AGENTS.md`, `CLAUDE.md` 삭제가 섞여 올라갔음 -> `8b2f6a4` 에서 복원. 앞으로는 `git add` 에 파일을 명시.
+
 ## 2026-10-01 (이어서 3) — 업스트림 병합, start.sh 기본 production, 패널 배치, stop.sh 보강
 
 ### git 업스트림 받기 (충돌 해결)
