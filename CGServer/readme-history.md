@@ -140,16 +140,20 @@
 - 개체 하나만 흘리려면 Still 모드에서 그 개체의 Effects 를 Crawl/Roll 로 지정(`가로스크롤-예제` 방식).
 - 도움말(사용 방법)에 위 내용을 한 문단으로 추가.
 
-### 13) 모니터 두 대: HDMI-1 = 에디터, HDMI-2 = 송출 화면
+### 13) 모니터 두 대 구성과 자동 감지 (HDMI-1 = 데스크탑, HDMI-2 = 송출)
 
-- 요청: HDMI-1 은 에디터(키오스크), HDMI-2 는 송출(미리보기) 출력. 기존 `display.sh`(10번대 항목)는 연결된 **첫 출력 하나만** 설정하고 X 화면 크기를 그 하나에 맞춰서 두 대 배치를 깨뜨릴 수 있었음(이 단말은 확인 시점마다 모니터가 한 대만 연결되어 있어 실제 두 대 상태는 못 봄).
-- `bin/display.sh` 재작성: 연결된 출력과 권장(첫) 모드를 읽어, **두 대**(`editor_display`=HDMI-1, `output_display`=HDMI-2 모두 연결)면 HDMI-1 을 왼쪽 `0,0`, HDMI-2 를 그 오른쪽에 나란히 두고 X 화면을 합친 크기로 설정. **한 대**면 그 모니터를 에디터/송출이 같이 사용. 결과 영역을 `bin/.run/display-editor.geom`, `display-output.geom`("x y w h")에 기록. 연결 안 된 출력은 끔.
-- cg-streamer: 미리보기 창을 `display-output.geom` 위치/크기(송출 모니터)에 만듦(없으면 화면 전체). reload/Switch/`POST /display` 때 영역(위치·크기)이 달라지면 창을 다시 만듦. 로컬 음성 `audio_out=auto` 는 `output_display` 모니터의 소리 카드(HDMI-A-N → rockchiphdmi(N-1))를 우선, 그 모니터가 없으면 연결된 첫 HDMI.
-- `start.sh`: 키오스크 Chromium 을 `display-editor.geom` 위치/크기(`--window-position/--window-size`)로 띄움. `cgsetup.cfg` 에 `editor_display`, `output_display` 추가(다른 포트로 바꾸려면 여기만 수정).
-- 검증: 가짜 `xrandr` 로 두 대(1920x1080 + 1024x600 → 화면 2944x1080, HDMI-1 `0 0 1920 1080`, HDMI-2 `1920 0 1024 600`)와 한 대 경로의 호출/좌표를 확인. 단말에서는 한 대 상태로 동작 확인(미리보기 1024x600, 음성 연결된 HDMI 카드). 이후 사용자가 두 대를 연결해 실제로 확인: HDMI-1(1024x600) `0,0`, HDMI-2(1920x1080) `1024,0`, X 화면 2944x1080. X 창 목록에서 에디터(`Huton CG Editor` Chromium)가 `1024x600+0+0`(HDMI-1), 송출 미리보기가 `1920x1080+1024+0`(HDMI-2), 로컬 음성은 `rockchiphdmi1`(HDMI-2 카드).
-- 두 대 연결 직후 모두 송출 화면으로 보인 원인 2가지: (1) 모니터를 꽂은 뒤 `display.sh` 가 다시 실행되지 않아 두 출력이 `0,0` 에 겹쳐 있었음 -> `stop.sh`/`start.sh` 또는 Reload/Switch 로 배치 재계산. (2) **키오스크(에디터) Chromium 이 아예 안 떠 있었음**: 프로필 폴더 `/tmp/cg-editor-kiosk` 가 root 소유라 pi 계정에서 `process_singleton ... Permission denied` -> `start.sh` 의 `KIOSK_PROFILE` 을 `/tmp/cg-editor-kiosk-$(id -un)`(사용자별)로 변경. root 로 키오스크를 띄운 적이 있으면 같은 문제가 생길 수 있음.
-- 이후 "HDMI-1 이 데스크톱 화면": 키오스크 Chromium 이 ssh 세션 안에서 띄워져 세션이 끝날 때 같이 사라진 것(창 목록에 `Huton CG Editor` 없음). `setsid nohup` 으로 세션과 분리해 다시 띄우고 별도 ssh 접속에서 30초 뒤에도 창이 `1024x600+0+0` 에 있음을 확인. `start.sh` 의 Chromium 실행에도 `setsid` 추가. 주의: `pgrep chromium` 은 프로세스 이름이 `chrome` 이라 0 으로 나오므로 확인은 X 창 목록(`xwininfo -root -tree | grep 'Huton CG Editor'`)으로.
-- 참고: `src/cg-editor/AGENTS.md`, `CLAUDE.md` 는 사용자가 직접 삭제한 것(이 커밋 `38e9714` 에 삭제가 함께 올라감). 이를 실수로 보고 `8b2f6a4` 에서 복원했다가 다시 삭제함. 앞으로는 `git add` 에 파일을 명시.
+- 요청: 모니터 두 대 중 HDMI-1 은 에디터/데스크탑, HDMI-2 는 송출(미리보기) 출력. 이전 `display.sh` 는 연결된 첫 출력 하나만 설정하고 X 화면을 그 하나에 맞춰 두 대 배치를 깨뜨릴 수 있었음.
+- **최종 동작** (`bin/display.sh`, 한 번 재작성했다가 사용자 요청 "HDMI-1 은 제어하지 말고 HDMI-2 만 제어"로 축소):
+  - **송출 모니터(`output_display`, 기본 HDMI-2)만 제어**하고 다른 모니터(HDMI-1 등)의 켜짐/모드/위치는 건드리지 않음.
+  - 송출 모니터가 이미 켜져 있고 다른 모니터와 겹치지 않으면 아무것도 바꾸지 않고 영역만 읽음. 꺼져 있거나(연결만 됨) 겹쳐 있으면(모니터를 꽂을 때 X 가 모두 0,0 에 겹쳐 놓음) HDMI-2 만 권장 모드로 켜서 다른 모니터들의 **오른쪽**에 둠. X 화면은 모자랄 때 키우기만 함(줄이지 않음).
+  - 결과 영역을 `bin/.run/display-output.geom`("x y w h")에 기록. `display-editor.geom` 은 에디터 모니터의 현재 영역(읽기 전용, 키오스크를 켰을 때만 사용). mawk 에서도 되도록 `split` 만 사용.
+  - 가짜 `xrandr` 로 정상 배치 / 연결 때 겹침 / HDMI-2 꺼짐 / 한 대만 연결 경로를 시험: 정상·한 대일 때 `xrandr` 변경 호출 없음, 겹침·꺼짐일 때 HDMI-2 와 화면 크기 확대만 호출(HDMI-1 은 한 번도 언급 안 됨).
+- **cg-streamer**: 미리보기 창을 `display-output.geom` 위치/크기(송출 모니터)에 만들고, 송출 모니터가 없으면 창을 띄우지 않음(데스크탑을 덮지 않도록). 로컬 음성(`audio_out=auto`)은 `output_display` 모니터의 소리 카드(HDMI-A-N → rockchiphdmi(N-1))를 우선, 없으면 연결된 첫 HDMI, 하나도 없으면 재생 안 하고 대기. 모니터 구성이 바뀌면 `ChangeLocalOut` 으로 실행 중에 장치 전환.
+- **모니터 연결 변경 자동 감지** (`DisplayWatch` 스레드): HDMI-A-1/2 의 `status` 와 **EDID 내용**을 0.5초마다 읽어 1.5초 동안 안정되면 `display.sh` 재실행 + 미리보기 창 재생성 + 로컬 음성 장치 전환. EDID 를 신호에 넣은 이유: 두 모니터를 서로 바꿔 꽂아도 포트가 계속 connected 로 보일 수 있음. reload/Switch project/`POST /display` 에서도 같은 배치 재계산.
+- **에디터 키오스크**(기본 `editor_kiosk=off`, `kiosk.sh start|stop|restart|restart-if-running`): 에디터는 데스크탑 브라우저로 직접 접속하는 것을 기본으로 함. 켤 경우: 프로필 폴더를 사용자별(`/tmp/cg-editor-kiosk-<user>`)로(root 가 만든 폴더 때문에 pi 계정에서 안 뜨던 문제), pid 파일 대신 프로필 폴더(`--user-data-dir`) 기준으로 찾고 종료(브라우저 래퍼가 실제 Chromium 을 자식으로 띄워 pid 가 안 맞음), `setsid` 로 ssh 세션과 분리, 작은 모니터(1024x600)용 `editor_scale=auto` 배율과 `--lang=ko-KR`/번역 끔 추가(화면에서 효과는 확인 못 함: Chromium 은 GPU 렌더링이라 `x11grab` 캡처가 오래된 화면을 줌).
+- 설정(`cgsetup.cfg`): `editor_display`(기본 HDMI-1), `output_display`(기본 HDMI-2), `editor_scale`, `editor_kiosk`, `realtime`.
+- 확인 사항: 단말에서 모니터 포트를 여러 번 바꿔 꽂으며(HDMI-1 1920x1080 + HDMI-2 1024x600 두 대 연결 포함) 배치가 자동으로 다시 잡히는 것 확인. 재부팅 후에는 엔진/에디터가 자동으로 시작되지 않아 `start.sh` 를 직접 실행해야 함(부팅 자동 시작 설정 없음).
+- 참고: `src/cg-editor/AGENTS.md`, `CLAUDE.md` 는 사용자가 직접 삭제한 것(`38e9714` 에 삭제가 함께 올라감). 실수로 보고 `8b2f6a4` 에서 복원했다가 다시 삭제함. 앞으로는 `git add` 에 파일을 명시.
 
 ### 14) 엔진을 올리면 마우스 클릭이 안 되던 문제: 미리보기 창이 원인(override_redirect)
 
