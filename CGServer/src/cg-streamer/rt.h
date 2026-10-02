@@ -8,7 +8,11 @@
 #include <atomic>
 #include <cstdio>
 
+// cgsetup.cfg 의 realtime=on 일 때만 켠다(기본 꺼짐). 켜진 뒤에 시작하는 스레드부터 적용되므로 설정을 읽은 다음에 스레드를 만든다.
+inline std::atomic<bool> g_rt_enabled{false};
+
 inline void SetRealtime(const char* what, int prio) {
+  if (!g_rt_enabled) return;
   static std::atomic<bool> warned{false};
   sched_param sp{};
   sp.sched_priority = prio;

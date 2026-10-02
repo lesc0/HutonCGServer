@@ -57,7 +57,11 @@ else
 fi
 fi
 
-if [ "${CG_SKIP_KIOSK:-0}" = 1 ]; then echo "[3/3] Chromium 키오스크 건너뜀(CG_SKIP_KIOSK=1)"; else
+# 에디터 키오스크는 cgsetup.cfg 의 editor_kiosk=on 일 때만 띄운다(기본 off: 이 단말의 데스크탑에서 브라우저를 직접 띄워 씀).
+KIOSK_CFG=$(sed -n 's/#.*//; s/^[[:space:]]*editor_kiosk[[:space:]]*=[[:space:]]*(.*[^[:space:]])[[:space:]]*$//p' cgsetup.cfg 2>/dev/null | tail -1)
+if [ "${CG_SKIP_KIOSK:-0}" = 1 ]; then echo "[3/3] Chromium 키오스크 건너뜀(CG_SKIP_KIOSK=1)"
+elif [ "${KIOSK_CFG:-off}" != on ]; then echo "[3/3] Chromium 키오스크 건너뜀(cgsetup.cfg editor_kiosk=off)"
+else
 echo "[3/3] Chromium 키오스크 (cg-editor 화면)"
 bash ./kiosk.sh start "$PORT"   # 에디터 모니터(.run/display-editor.geom) 위치에 띄움. 모니터 배치가 바뀌면 display.sh 가 kiosk.sh restart 로 다시 띄움
 fi

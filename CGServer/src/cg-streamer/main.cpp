@@ -220,6 +220,7 @@ static void LoadSetupCfg(const std::string& path) {
     else if (k == "udp_port") g_udp_port = atoi(v.c_str());
     else if (k == "audio_out") g_audio_out = v;
     else if (k == "output_display") g_output_display = v;
+    else if (k == "realtime") g_rt_enabled = (v == "on" || v == "1" || v == "true");
     else if (k == "fps") g_fps = std::max(1, atoi(v.c_str()));
   }
 }
@@ -671,12 +672,18 @@ static bool ReadOutputGeom(int& x, int& y, int& w, int& h) {
 }
 
 // 반환: true = 화면 해상도 변경으로 다시 만들어야 함, false = 종료/실패
-static bool PreviewRun() {
+// 반환: 0 = 종료/실패, 1 = 송출 모니터 영역이 바뀌어 다시 만들어야 함, 2 = 송출 모니터가 없어 창을 띄우지 않음(모니터가 생길 때까지 기다림)
+static int PreviewRun() {
   Display* dpy = XOpenDisplay(nullptr);
-  if (!dpy) { fprintf(stderr, "[preview] XOpenDisplay 실패 (DISPLAY 필요)\n"); return false; }
+  if (!dpy) { fprintf(stderr, "[preview] XOpenDisplay 실패 (DISPLAY 필요)\n"); return 0; }
   int screen = DefaultScreen(dpy);
-  int sw = DisplayWidth(dpy, screen), sh = DisplayHeight(dpy, screen), gx = 0, gy = 0;
-  ReadOutputGeom(gx, gy, sw, sh);   // display.sh 가 기록한 송출 모니터 영역(없으면 화면 전체)
+  int sw = 0, sh = 0, gx = 0, gy = 0;
+  if (!ReadOutputGeom(gx, gy, sw, sh)) {   // display.sh 가 기록한 송출 모니터 영역. 없으면 화면 전체를 덮지 않고(다른 모니터를 막지 않도록) 창을 띄우지 않는다
+    g_preview_w = 0;
+    g_preview_h = 0;
+    XCloseDisplay(dpy);
+    return 2;
+  }
   g_preview_x = gx;
   g_preview_y = gy;
   g_preview_w = sw;
@@ -784,13 +791,21 @@ static bool PreviewRun() {
   XFreeGC(dpy, gc);
   XDestroyWindow(dpy, win);
   XCloseDisplay(dpy);
-  return g_preview_reset && !g_quit;
+  return (g_preview_reset && !g_quit) ? 1 : 0;
 }
 
 static void PreviewLoop() {
   pthread_setname_np(pthread_self(), "cg-preview");
   SetRealtime("cg-preview", 49);
-  do { g_preview_reset = false; } while (PreviewRun());
+  for (;;) {
+    g_preview_reset = false;
+    const int r = PreviewRun();
+    if (r == 0 || g_quit) break;
+    if (r == 2) {   // 송출 모니터가 없음: 창을 띄우지 않고 ApplyDisplay 가 모니터를 찾아 reset 표시를 할 때까지 기다린다
+      printf("[preview] 송출 모니터(%s)가 없어 미리보기 창을 띄우지 않음\n", g_output_display.c_str());
+      while (!g_quit && !g_preview_reset) std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+  }
 }
 
 // 로컬 음성을 내보낼 ALSA 장치: 송출 모니터(output_display, 기본 HDMI-2)가 연결되어 있으면 그 쪽 소리 카드, 아니면 연결된 첫 HDMI(모니터가 한 대일 때),
@@ -821,16 +836,14 @@ static void ApplyDisplay() {
       if (system(cmd.c_str()) != 0) fprintf(stderr, "[display] display.sh 실행 실패\n");
     }
     if (g_output_type == 3 && (g_audio_out == "auto" || g_audio_out.empty())) g_audio.ChangeLocalOut(PickAudioDev());   // 소리가 나갈 HDMI 가 바뀌었을 수 있음
-    if (g_preview && g_preview_w > 0) {   // 새 연결로 현재 X 화면 크기를 읽어 창 크기와 비교
-      if (Display* d = XOpenDisplay(nullptr)) {
-        int w = DisplayWidth(d, DefaultScreen(d)), h = DisplayHeight(d, DefaultScreen(d)), x = 0, y = 0;
-        XCloseDisplay(d);
-        ReadOutputGeom(x, y, w, h);
-        if (w != g_preview_w || h != g_preview_h || x != g_preview_x || y != g_preview_y) {
-          printf("[display] 송출 화면 영역 변경 %dx%d+%d+%d -> %dx%d+%d+%d: 미리보기 창 다시 만듦\n", (int)g_preview_w, (int)g_preview_h,
-                 (int)g_preview_x, (int)g_preview_y, w, h, x, y);
-          g_preview_reset = true;
-        }
+    if (g_preview) {   // display.sh 가 기록한 송출 모니터 영역이 지금 미리보기 창과 다르면(또는 모니터가 생기거나 사라졌으면) 창을 다시 만든다
+      int x = 0, y = 0, w = 0, h = 0;
+      const bool have = ReadOutputGeom(x, y, w, h);
+      const bool had = g_preview_w > 0;
+      if (have != had || (have && (w != g_preview_w || h != g_preview_h || x != g_preview_x || y != g_preview_y))) {
+        printf("[display] 송출 화면 영역 변경 %dx%d+%d+%d -> %dx%d+%d+%d: 미리보기 창 다시 만듦\n", (int)g_preview_w, (int)g_preview_h,
+               (int)g_preview_x, (int)g_preview_y, w, h, x, y);
+        g_preview_reset = true;
       }
     }
     busy = false;
