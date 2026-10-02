@@ -1,55 +1,72 @@
 # 작업 히스토리 (cef_mpp / zcgserver)
 
-## 2026-10-02 (이어서 10) — 마우스 드래그 범위 선택(큰 개체 위에서도), 그룹 묶기/해제, 색 버튼 설명
+## 2026-10-02
 
-- 증상: 여러 개체를 마우스로 드래그해 선택하고 싶은데 안 됨. 원인: 범위 선택(marquee)은 **빈 배경(`bg`)에서 눌렀을 때만** 시작되는데, `가로스크롤-예제` 처럼 영상/배경 개체가 화면 전체를 덮으면 빈 곳이 없음.
-- 수정(`editor-canvas.tsx`): 화면을 덮는 개체(`bgLike`: 영상 / 고정 / 잠금 / 면적이 화면의 60% 이상)는 **선택되어 있지 않을 때** 그 위에서 드래그하면 개체 이동 대신 범위 선택이 시작됨. 마우스를 떼면: 범위가 있으면 선택(덮는 개체는 선택 대상에서 제외), 거의 안 움직였으면(클릭) 그 개체가 선택됨. 이미 선택된 덮는 개체는 전과 같이 드래그로 이동. 더블클릭/Alt+클릭은 기존 동작.
-- **Shift/Ctrl+드래그**는 기존 선택에 추가(합집합). 선택 후 기존 그룹 묶기 버튼(Ctrl+G)/그룹 해제 버튼(Ctrl+Shift+G)을 그대로 사용(코드 변경 없음).
-- 도움말(사용 방법)에 범위 선택·추가 선택·그룹 방법, 단축키 목록(`드래그 / Shift·Ctrl+드래그`), 색 설정 F/E-1/E-2/E-3/S 의 의미(Face / Edge 1~3 / Shadow)를 추가. 색 버튼은 글자로 풀어 쓰면 칸을 벗어나므로 이름은 그대로 두고 툴팁 + 도움말로 설명.
-- 우클릭 컨텍스트 메뉴 항목에 아이콘 추가(lucide): 복사(Copy) · 붙여넣기(ClipboardPaste) · 그룹(Group) · 그룹 해제(Ungroup) · 화면 전체 크기로(Maximize2) · 배경객체 고정(Pin) · 위치 고정 해제(UnlockKeyhole) · 숨기기(EyeOff) · 삭제(Trash2) · 닫기(X). 항목은 [이름, 동작, 아이콘] 으로 정의.
-- 참고: 화면 60% 이상을 차지하는 개체는 드래그 이동이 막히므로(먼저 클릭해 선택하면 이동 가능) 위치는 Attributes 의 X/Y 로도 바꿀 수 있음.
+### 1) HDMI 입력 음성이 무음으로 송출되던 문제 수정
 
-## 2026-10-02 (이어서 9) — Attributes 가운데 칸(Name/자막 내용) 폭 축소
 
-- Attributes 탭 가운데 칸(`.textproperties`: Name 입력, 자막 내용 입력, 선택 안내 + 전체 적용 버튼)의 폭을 `flex:0 0 239px` → **140px** 로 줄임(`globals.css` 마지막 덮어쓰기 규칙). 줄어든 폭은 나머지 칸이 가져감. 안내 문구는 줄바꿈되어 표시. Font 칸(`.fontproperties`)도 `285px` → **250px** 로 조금 줄임. 오른쪽 색 대상 버튼(F/E-1/E-2/E-3/S, `.facebuttons`)은 줄바꿈을 막고 한 줄로 배치: 5개를 **같은 너비**(`flex:1 1 0`)로 칸 끝까지 채우고 간격 2px(색 띠 10→5px, 칸 최소 폭 140px). `space-between` 은 버튼 너비가 제각각이라 되돌림. 각 버튼에 마우스를 올리면 의미 설명(툴팁): F=Face(글자 면), E-1/E-2/E-3=Edge 1~3(바깥으로 겹쳐 두르는 3중 테두리, 두께 0이면 안 보임), S=Shadow(그림자). 더 줄이거나 늘리려면 같은 줄의 `140px`/`250px` 만 바꾸면 됨.
+#### 증상
+- cg-streamer 가 HDMI IN(`rk_hdmirx`) 라이브 소스일 때 음성도 AAC 로 인코딩해 TS 로 보내는데, 송출 TS 의 음성이 완전 무음(-91dB)이고 player 에서 소리가 안 남.
+  로그에는 `[hdmirx] 음성 캡처 시작`이 수천 번 반복(캡처를 열자마자 read 실패 → 복구 실패 → 닫고 재오픈 루프). mp4 영상의 음성은 정상(-11dB).
 
-## 2026-10-02 (이어서 8) — Effects 시간 항목 이름 변경 (Duration/Length/Begin)
+#### 진단 (테스트 단말 CM3588, 커널 6.1.141)
+- 송출을 단말 자신(`CG_UDP=10.10.10.56:1234`)으로 보내 `ffmpeg -c copy` 로 받아 `ffprobe`/`volumedetect` 로 확인. 스트림 구조(H.264 + AAC 48k 스테레오)는 정상, 음성 값만 무음.
+- 스트리머 없이 `arecord -D plughw:CARD=rockchiphdmiin,DEV=0 -f S16_LE -r 48000 -c 2` 도 `read error: Input/output error`. HDMI 수신기 쪽은 `audio_present: 1`, `audio on`(48000/2ch).
+- 사용자가 `arecord -D hw:0,0 ... --period-size=1024 --buffer-size=4096` 은 된다고 알려 줌. 그래서 버퍼 크기가 원인인지 확인했는데 `--buffer-time=100000` 만 줘도 되고 기본값만 안 됨 → 크기 문제가 아니었음.
+- python ctypes 로 앱과 같은 호출(`snd_pcm_open` → `snd_pcm_set_params(…, 100000)` → `snd_pcm_readi`)을 재현: `readi` 가 계속 -5(EIO). 사이에 `snd_pcm_start()` 를 넣으면 `[1024, 1024, …]` 로 정상 + 실제 신호. `hw_params` 로 period 1024/buffer 4096 을 직접 지정해도 정상.
+- **원인**: 이 보드(rk_hdmirx 캡처 카드)는 `readi` 의 자동 시작(PREPARED → 시작)이 EIO 로 실패해서, 열고 나서 `snd_pcm_start()` 를 명시적으로 불러야 한다.
 
-- 혼란: `Duration`(효과가 진행되는 시간)과 `Length`(개체가 화면에 떠 있는 전체 시간)가 둘 다 "시간 길이"로 읽혀 구분이 안 됨, `Begin` 도 무엇의 시작인지 불분명.
-- 변경(`attributes.tsx` 라벨만, 저장 필드명 `inDuration/outDuration/start/duration` 은 그대로라 기존 프로젝트 호환): **Duration → In Duration / Out Duration**(위의 In/Out 선택에 따라 바뀜; 처음엔 In Time/Out Time 으로 했다가 요청으로 Duration 유지), **Length → Show Time**, **Begin → Start Time**. Speed 유지. 각 항목에 마우스를 올리면 설명(title) 표시, 도움말에도 설명 추가.
-- Crawl/Roll 은 In/Out 시간을 쓰지 않으므로(진행이 Show Time 전체에 걸쳐 0→100%) 해당 효과를 선택하면 In/Out Duration 입력을 비활성화하고 툴팁에 안내.
+#### 수정 (`src/cg-streamer/hdmirx_source.cpp`, 커밋 af92fae)
+- libasound 를 dlopen 하는 `AudioRun` 에 `snd_pcm_start` 심볼 추가. 캡처를 열고 `set_params` 직후 `start` 호출(실패하면 닫고 500ms 뒤 재시도).
+- 에러 복구(`snd_pcm_recover`) 뒤에도 `start` 를 다시 호출. recover/start 가 실패하면 닫고 다시 연다.
 
-## 2026-10-02 (이어서 7) — Effects 번호(001~)가 뭐가 다른지 표시
+#### 검증
+- 단말에서 `git pull` → `cmake --build --preset rk3588` 빌드 성공 → `수영-기록` 프로젝트(HDMI 소스)를 자기 자신으로 송출해 받아 확인: 음성 mean -25.8dB / max -10.3dB(수정 전 -91dB 무음), `음성 캡처 시작` 로그 1회(반복 없음). 이후 사용자가 player 에서 소리가 나옴을 확인.
 
-- 증상: Effects 탭의 효과별 번호 버튼(001~015)이 번호만 있고 무엇이 다른지 알 수 없음(Cut/Fade/Curl/Tile/Banner/Text/Crawl/Roll 은 미리보기가 비어 있음. 색 문제가 아니라 내용이 없었음).
-- 조사(`effects.ts` `visual()` 기준 번호의 실제 의미):
-  - Move: 001~004 좌/우/상/하에서 들어옴, 005~008 모서리(오른쪽 위/왼쪽 위/오른쪽 아래/왼쪽 아래)에서 대각선, 009~012 는 005~008 과 같음.
-  - Scale: 001~004 좌/우/상/하 끝 기준, 005 가로로만, 006 세로로만. Wipe/Banner/Curl: 번호%8 이 모양(좌/우/상/하/가운데 가로/가운데 세로/대각 2종), 009 이상은 앞 번호와 같은 모양. Banner 는 번호 홀짝으로 기울기(±8°), Curl 은 말림. Organic: 번호%3 = 사각형/가로 조각/원 + 번호마다 무작위 순서. Tile: 번호%3 = 동시/대각선/무작위.
-  - **Crawl/Roll/Text**: 번호(`effectPreset`)는 아무 영향이 없고 방향만 바뀜. Crawl 은 왼쪽/오른쪽(위/아래는 왼쪽으로 처리), Roll 은 위/아래만 의미 있음.
-- 수정(`effects.ts` `presetInfo/presetCount/presetDirection`, `attributes.tsx`): 번호 버튼마다 **기호 + 짧은 글자 + 마우스를 올리면 나오는 설명(title)**. 의미 없는 번호는 정리: Crawl 2개(←/→), Roll 2개(↑/↓), Text/Cut/Fade/Blink 1개. 번호를 누를 때 방향도 효과에 맞게 지정(Crawl: 좌/우, Roll: 상/하).
-- 기존 프로젝트: 저장된 `effectPreset`/`direction` 값은 그대로라 재생은 달라지지 않음(Crawl/Roll 에서 정리된 번호 밖 값은 번호 버튼 강조만 안 보임).
+#### 운영 메모
+- 단말에서 ssh 로 `pgrep -f "cg-streamer --run"` 처럼 패턴을 명령줄에 포함하면 ssh 로 실행한 셸 자신이 매칭돼서 `start.sh` 가 "이미 실행 중"으로 오인해 시작을 건너뜀(실제로 스트리머가 안 뜬 채 지나갈 뻔함). 확인할 때는 `ps -eo pid,etime,args | grep "[.]/cg-streamer"` 처럼 쓸 것.
+- 비대화형 ssh(비밀번호)가 필요하면 `SSH_ASKPASS` 스크립트 + `SSH_ASKPASS_REQUIRE=force` 로 가능(sshpass 없는 Windows Git Bash).
+- 단말의 `bin/cgsetup.cfg`, `bin/project/가로스크롤-예제.json` 에 로컬 수정이 남아 있음(의도 확인 필요).
+- 페이지 전환(`next` 명령) 테스트 중 로그에 `*** stack smashing detected ***` 가 한 번 찍힘(프로세스는 계속 동작). 원인 미확인 — 재현되면 추적.
 
-## 2026-10-02 (이어서 6) — 그룹으로 묶은 개체 중 하나만 선택/편집 (Alt+클릭, 더블클릭)
+### 2) 로컬 HDMI 화면 해상도 맞춤 + 로컬 HDMI 로도 음성 재생
 
-- 증상: `가로스크롤-예제` 하단 자막(여러 개체)을 그룹으로 묶자, 그 안의 crawl 이 걸린 개체의 속성/효과를 따로 설정할 수 없음. 원인: 그룹은 `groupId` 로 묶이고 `selectedIds` 가 멤버 하나를 클릭해도 **그룹 전체를 선택**, 속성 변경(`patch`)은 선택된 모든 멤버에 적용됨.
-- 수정(에디터): 그룹을 무시하고 **그 개체 하나만** 선택하는 방법 추가. `selectedIds(..., single)`, `select(id, toggle, single)`.
-  - 캔버스: **Alt+클릭** 또는 **더블클릭**(그룹 멤버 / 글자 개체는 편집 모드 진입과 함께 그 개체만 선택).
-  - 타임라인: 개체 아이콘 **Alt+클릭**, 막대를 **Alt+드래그**하면 그 개체만 이동/조절(그룹 동료는 같이 움직이지 않음).
-  - 일반 클릭은 이전처럼 그룹 전체 선택(이동/복사 등 그룹 동작 유지). 도움말에 사용법 한 줄 추가.
-- 참고: 그룹 해제 없이도 개체별 Effects(Crawl 등) 설정 가능. Windows 브라우저에서 Alt 를 눌렀다 떼면 메뉴바가 활성화될 수 있어 불편하면 더블클릭을 쓰면 됨.
 
-## 2026-10-02 (이어서 5) — HDMI 2 로컬 화면 "툭툭": 미리보기 62.5Hz 타이머 버그 수정 + 스레드 SCHED_FIFO
+#### 로컬 화면(HDMI 2) 해상도가 안 맞던 문제 (`bin/start.sh`)
+- 증상: output=3(HDMI+UDP)에서 로컬 모니터에 화면이 잘려 나옴. 원인: HDMI-2 모니터는 1024x600 모드인데 X 화면(프레임버퍼)은 1920x1080 이고, 미리보기 창(`PreviewLoop`)은 X 화면 크기로 만들어져 왼쪽 위 1024x600 만 보였음. 기존 `xrandr` 모드 설정은 스트리머가 뜬 *뒤* 키오스크 단계에서만 해서 늦었음.
+- 수정: 스트리머 시작 *전에* 연결된 첫 출력의 권장(첫) 모드 적용 + 연결 안 된 출력 `--off` + `xrandr --fb <모드>` 로 X 화면 크기도 맞춤. 모니터가 바뀌면 그 모니터 권장 해상도로 자동 적용(`start.sh` 실행 시점에만 적용, 이후 모니터 교체는 stop/start 필요). 다른 모니터(1920x1080 전용)로 바뀐 뒤에도 미리보기 창이 1920x1080 으로 맞게 시작됨.
+- 송출은 1920x1080 고정이라 1024x600(1.71:1) 모니터에서는 가로가 약 4% 늘어남(비율 유지 레터박스는 미구현).
 
-- 배경: 송출 영상(TS)의 자막 이동량은 SMOOTH_DT 로 고르게 됐는데도(앞 항목) "별 차이 없다". 사용자가 보는 곳은 **HDMI 2 로컬 화면(output=3 미리보기)**이었음 -> 송출 TS 가 아니라 로컬 표시 경로를 점검.
-- **원인 1 — 미리보기 타이머가 62.5Hz**: `PreviewLoop` 가 `std::chrono::milliseconds(1000 / g_fps)` = 16ms 주기로 그림(60fps 의 정수 ms 내림). 로그의 `[preview-stat] drawn=63/s` 가 증거. 모니터는 60Hz 라 초당 2~3번 프레임이 겹치거나 건너뛰어 규칙적인 "툭툭"으로 보임.
-- **수정 1**: 타이머 대신 **인코더가 새 프레임을 만들 때마다**(`EncodeLoop` 가 `g_pv_seq` 증가 + `condition_variable` 통지) 미리보기가 한 장씩 그림 -> 정확히 초당 60장(`drawn=60/s`). 대기는 50ms 마다 깨어 종료/해상도 변경(창 재생성)을 확인.
-- 진단 추가: `[preview-stat]` 에 `draw_gap_max`(그린 시각 사이 최대 간격 ms). `[stat]` 의 `gap_max/late25/big100`(OnPaint 도착 간격)와 함께 본다.
-- **스레드 SCHED_FIFO** (`src/cg-streamer/rt.h` `SetRealtime`): cg-encode 50, cg-preview 49, cg-audio 48, cg-hdmirx 48, cg-hdmi-aud 48, cg-audio-out 47. 권한이 없으면(RLIMIT_RTPRIO=0) 한 번만 안내하고 일반 스케줄링으로 계속 동작. CEF 렌더러/컴포지터 스레드는 그대로 둠. 실시간 스레드는 모두 대기(sleep/wait) 위주라 기아 위험이 낮고 커널 RT 스로틀(95%)이 안전망.
-- **권한 부여(단말, 1회)**: `sudo sh -c 'echo "pi - rtprio 90" > /etc/security/limits.d/99-cg-rt.conf'` 후 **다시 로그인**해야 적용(`ulimit -r` 이 90 으로 보임). `bin/start.sh` 는 `ulimit -r` 이 0 이면 안내를 출력. setcap 은 CEF 하위 프로세스/라이브러리 경로(AT_SECURE) 때문에 쓰지 않음.
-- 검증(단말): 로그 `[rt] cg-encode: SCHED_FIFO 50` 등 6개, `ps -L` 에서 해당 스레드가 `FF`(FIFO) 우선순위 50/49/48/47 로 표시. 미리보기 `draw_gap_max` 는 보통 18~19ms(이전 타이머 방식은 `drawn=63/s`, 틱 간격 어긋남). 주관적 부드러움은 사용자 확인("지금 잘되는 것 같다").
-- 주의: 확인용 ssh 명령 문자열에 `cg-streamer --run` 같은 패턴을 쓰면 `start.sh` 의 `pgrep -f` 가 그 셸을 스트리머로 오인해 시작을 건너뜀(이번에도 한 번 발생, 로그만 보고 정상으로 착각할 뻔함). 확인할 때는 스크립트 파일로 올려 실행하거나 `ps -eo pid,args | grep "[.]/cg-streamer"` 사용.
+#### 로컬 HDMI 로도 음성 재생 (output=3, `cgsetup.cfg audio_out`)
+- 이전까지 음성은 AAC 로 TS(UDP)에만 들어가고 로컬 HDMI 에는 안 나갔음. `AudioMixer` 가 송출용으로 만든 같은 믹스(영상 mp4 음성 + HDMI 입력 음성)를 ALSA 재생 장치로도 내보내도록 추가(`LocalRun` 스레드: 블록 큐 → `snd_pcm_writei`, libasound dlopen, 장치 없음/에러 시 닫고 재시도, 큐는 8블록 상한으로 송출을 막지 않음).
+- 설정: `cgsetup.cfg` 의 `audio_out` = `auto`(기본, output=3 일 때 연결된 HDMI 커넥터의 소리 카드: HDMI-A-1→`rockchiphdmi0`, HDMI-A-2→`rockchiphdmi1`) / `off` / ALSA 장치명.
+- 구현 중 버그 2건: (1) 음성 설정을 `LoadSetupCfg` 이전에 읽어 항상 꺼져 있었음 → 로딩 이후로 이동. (2) printf 문자열 개행 이스케이프 오류로 빌드 실패.
+- 검증: 단말에서 `[audio] 로컬 출력 시작: plughw:CARD=rockchiphdmi1,DEV=0` 로그 확인, HDMI 캡처 반복 로그 없음. 실제 소리/지연(영상 대비)은 사용자 확인 필요.
+- 운영 메모: 단말의 `bin/cgsetup.cfg`(udp_ip=10.10.10.11)처럼 로컬 수정이 있으면 `git pull` 이 막히므로 `git stash` → `git pull` → `git stash pop` 사용.
 
-## 2026-10-02 (이어서 4) — 하단 자막(crawl) 끊김 원인 측정과 수정: 프레임 시간을 균일 간격으로
+### 3) 해상도 재설정 명령 (Reload / Switch project 에 포함)
+
+
+- 배경: 해상도 자동 설정이 `start.sh` 실행 시점에만 돼서, 스트리머를 켜 둔 채 모니터를 바꿔 꽂으면(`xrandr --fb` 로 고정된 X 화면 + 시작 시 한 번 만든 미리보기 창) 반영이 안 됨.
+- `bin/display.sh` 신설: 연결된 첫 출력의 권장 모드 적용 + 연결 안 된 출력 `--off` + X 화면 크기(`--fb`)를 같게(커지는 경우/작아지는 경우 모두 되도록 fb→모드→fb 순서로 시도). `start.sh` 가 스트리머 시작 전에 `bash ./display.sh` 로 호출(기존 인라인 코드를 이 스크립트로 이동). `.gitignore` 에 `!bin/display.sh`.
+- cg-streamer(`ApplyDisplay`): 별도 스레드에서 `display.sh` 를 실행한 뒤 현재 X 화면 크기를 읽어 **미리보기 창 크기와 다르면** `PreviewLoop` 를 다시 돌려 창/버퍼를 새 크기로 재생성(`PreviewRun` 이 true 를 반환). 같은 크기면 아무것도 안 해서 화면 깜박임 없음. 송출(인코딩/UDP)은 끊기지 않음.
+- 호출 시점: **Reload saved project**(`POST /reload`), **Switch project**(`POST /switch`) 때 자동 + 단독 명령 `POST /display`(에디터 `/ctl/display` 중계로도 가능). 에디터 UI 는 변경 없음(기존 두 버튼이 같은 엔드포인트를 씀).
+- 검증(단말): 해상도를 일부러 1280x720 으로 바꿔 둔 뒤 `POST /display`·`/reload` → 1024x600(연결된 모니터 권장)으로 복귀. 화면 크기가 달라지는 경우 `[display] 화면 크기 변경 1280x720 -> 1024x600: 미리보기 창 다시 만듦` 로그와 함께 창이 새 크기로 재생성됨.
+- 한계: 모니터를 바꿔 꽂은 뒤 **Reload/Switch project(또는 /display)를 눌러야** 반영됨(핫플러그 자동 감지는 아님). Chromium 키오스크 창 크기는 이 경로로 갱신하지 않음.
+
+### 4) Output Stream Control 이 적용 중인 프로젝트를 보여줌, 마지막 적용 프로젝트로 시작, 첫 실행은 빈 프로젝트
+
+
+- **엔진 상태에 `file` 추가**: `GET /status` 응답에 현재 적용된 프로젝트 **파일 이름**(.json 제외)을 `file` 로 넣음(프로젝트 안의 `name` 은 파일명과 다를 수 있음: 예 파일 `생활정보-문자방송` ↔ name `생활정보 문자방송`). 적용된 프로젝트 파일이 없으면 `file` 은 생략.
+- **Output Stream Control (`stream-control.tsx`)**: 콤보박스를 `status.file` 로 선택해 보여 줌. 이전에는 목록의 첫 항목(가나다순)을 임의로 골라 실제 송출 중인 프로젝트와 달랐음. 사용자가 직접 고르기 전까지는 엔진 쪽 변경(다른 곳에서 Switch, 재시작)도 따라가고, Switch project 후 다시 엔진을 따라감. 적용된 프로젝트가 없으면 `(no project applied)` 로 비워 둠.
+- **마지막 적용 프로젝트 기록**: Switch project 성공 시 `bin/.run/last-project` 에 파일 이름 기록. `bin/start.sh` 는 `CG_PROJECT` 가 없으면 이 기록으로 시작(이전엔 항상 `자막프로젝트`). **기록이 없는 첫 실행이면 빈 프로젝트**(없는 파일 `project/.none.json` 을 주어 엔진 대기 상태 `{"ready":false}`)로 시작. 기록된 파일이 사라졌어도 빈 프로젝트.
+- **대기 상태에서 Switch/Reload 가 안 되던 버그**: 프로젝트 없이 뜬 플레이어는 프레임 루프가 안 돌아 `cg.cmd("reload")` 로는 시작되지 않음(status 계속 `ready:false`, paint=0). 대기 상태(`"ready":true` 가 상태에 없음)일 때는 `location.reload()` 로 페이지를 새로 불러오도록 함(`ReloadJs`).
+- **에디터 기본 탭**: Timeline / Playback 창의 기본 탭을 `Timeline` → **`Output Stream Control`** 로 변경(`page.tsx` 의 `playTab` 초기값). 에디터는 원래 빈 프로젝트(`initial()`, 빈 페이지 4장)로 시작하므로 처음 열면 이 탭이 보임.
+- 검증(단말): 기록 삭제 후 시작 → `{"ready":false}`(빈 프로젝트) → Switch `생활정보-문자방송` → ready:true, `last-project` 기록 → 재시작하면 기록된 프로젝트로 시작. 확인 후 `자막프로젝트` 로 되돌려 둠.
+- 주의: 이 변경 이후 `last-project` 기록이 없는 단말을 재시작하면 빈 프로젝트(대기)로 뜸. 기존처럼 `자막프로젝트` 로 시작하려면 한 번 Switch project 로 지정하거나 `CG_PROJECT=자막프로젝트 ./start.sh`.
+
+### 5) 하단 자막(crawl) 끊김 원인 측정과 수정: 프레임 시간을 균일 간격으로
+
 
 - 증상: 가로 스크롤 하단 자막이 "툭툭" 끊김. 웹 검색(캔버스 서브픽셀/정수 스냅, rAF delta time, CEF OSR 프레임 누락)으로 후보를 정리한 뒤 **단말에서 직접 측정**해 원인 확정.
 - 측정 도구: (1) `[stat]` 에 OnPaint 도착 간격 진단 추가(`gap_max`, `late25`=25ms 초과 횟수, `big100`=100ms 초과 횟수). (2) 송출 TS 를 단말로 받아(`CG_UDP=10.10.10.56:1234`) 자막 줄의 가로 띠(1660x6)를 프레임마다 잘라 인접 프레임 간 이동량을 SAD + 포물선 보간으로 추정(평균/표준편차/평균에서 1px 넘게 벗어난 프레임 비율).
@@ -61,64 +78,60 @@
 - 부수 개선: 텍스트 캐시(`cachedTextCanvas`)가 매 프레임 `JSON.stringify` 로 시그니처를 만들던 것을, 같은 항목 객체이고 글자·runs 가 같으면 건너뛰도록 변경(CPU/GC 부담 감소).
 - 한계/참고: 자막 시작 직후 약 10프레임은 측정에서 제외해도 되는 구간(자막이 아직 안 움직임). 측정은 8~9초 단일 구간이라 장시간 변동(수 초마다의 멈칫)은 `[stat]` 의 `gap_max`/`late25` 로 계속 볼 수 있음.
 
-## 2026-10-02 (이어서 3) — Output Stream Control 이 적용 중인 프로젝트를 보여줌, 마지막 적용 프로젝트로 시작, 첫 실행은 빈 프로젝트
+### 6) HDMI 2 로컬 화면 "툭툭": 미리보기 62.5Hz 타이머 버그 수정 + 스레드 SCHED_FIFO
 
-- **엔진 상태에 `file` 추가**: `GET /status` 응답에 현재 적용된 프로젝트 **파일 이름**(.json 제외)을 `file` 로 넣음(프로젝트 안의 `name` 은 파일명과 다를 수 있음: 예 파일 `생활정보-문자방송` ↔ name `생활정보 문자방송`). 적용된 프로젝트 파일이 없으면 `file` 은 생략.
-- **Output Stream Control (`stream-control.tsx`)**: 콤보박스를 `status.file` 로 선택해 보여 줌. 이전에는 목록의 첫 항목(가나다순)을 임의로 골라 실제 송출 중인 프로젝트와 달랐음. 사용자가 직접 고르기 전까지는 엔진 쪽 변경(다른 곳에서 Switch, 재시작)도 따라가고, Switch project 후 다시 엔진을 따라감. 적용된 프로젝트가 없으면 `(no project applied)` 로 비워 둠.
-- **마지막 적용 프로젝트 기록**: Switch project 성공 시 `bin/.run/last-project` 에 파일 이름 기록. `bin/start.sh` 는 `CG_PROJECT` 가 없으면 이 기록으로 시작(이전엔 항상 `자막프로젝트`). **기록이 없는 첫 실행이면 빈 프로젝트**(없는 파일 `project/.none.json` 을 주어 엔진 대기 상태 `{"ready":false}`)로 시작. 기록된 파일이 사라졌어도 빈 프로젝트.
-- **대기 상태에서 Switch/Reload 가 안 되던 버그**: 프로젝트 없이 뜬 플레이어는 프레임 루프가 안 돌아 `cg.cmd("reload")` 로는 시작되지 않음(status 계속 `ready:false`, paint=0). 대기 상태(`"ready":true` 가 상태에 없음)일 때는 `location.reload()` 로 페이지를 새로 불러오도록 함(`ReloadJs`).
-- **에디터 기본 탭**: Timeline / Playback 창의 기본 탭을 `Timeline` → **`Output Stream Control`** 로 변경(`page.tsx` 의 `playTab` 초기값). 에디터는 원래 빈 프로젝트(`initial()`, 빈 페이지 4장)로 시작하므로 처음 열면 이 탭이 보임.
-- 검증(단말): 기록 삭제 후 시작 → `{"ready":false}`(빈 프로젝트) → Switch `생활정보-문자방송` → ready:true, `last-project` 기록 → 재시작하면 기록된 프로젝트로 시작. 확인 후 `자막프로젝트` 로 되돌려 둠.
-- 주의: 이 변경 이후 `last-project` 기록이 없는 단말을 재시작하면 빈 프로젝트(대기)로 뜸. 기존처럼 `자막프로젝트` 로 시작하려면 한 번 Switch project 로 지정하거나 `CG_PROJECT=자막프로젝트 ./start.sh`.
 
-## 2026-10-02 (이어서 2) — 해상도 재설정 명령 (Reload / Switch project 에 포함)
+- 배경: 송출 영상(TS)의 자막 이동량은 SMOOTH_DT 로 고르게 됐는데도(앞 항목) "별 차이 없다". 사용자가 보는 곳은 **HDMI 2 로컬 화면(output=3 미리보기)**이었음 -> 송출 TS 가 아니라 로컬 표시 경로를 점검.
+- **원인 1 — 미리보기 타이머가 62.5Hz**: `PreviewLoop` 가 `std::chrono::milliseconds(1000 / g_fps)` = 16ms 주기로 그림(60fps 의 정수 ms 내림). 로그의 `[preview-stat] drawn=63/s` 가 증거. 모니터는 60Hz 라 초당 2~3번 프레임이 겹치거나 건너뛰어 규칙적인 "툭툭"으로 보임.
+- **수정 1**: 타이머 대신 **인코더가 새 프레임을 만들 때마다**(`EncodeLoop` 가 `g_pv_seq` 증가 + `condition_variable` 통지) 미리보기가 한 장씩 그림 -> 정확히 초당 60장(`drawn=60/s`). 대기는 50ms 마다 깨어 종료/해상도 변경(창 재생성)을 확인.
+- 진단 추가: `[preview-stat]` 에 `draw_gap_max`(그린 시각 사이 최대 간격 ms). `[stat]` 의 `gap_max/late25/big100`(OnPaint 도착 간격)와 함께 본다.
+- **스레드 SCHED_FIFO** (`src/cg-streamer/rt.h` `SetRealtime`): cg-encode 50, cg-preview 49, cg-audio 48, cg-hdmirx 48, cg-hdmi-aud 48, cg-audio-out 47. 권한이 없으면(RLIMIT_RTPRIO=0) 한 번만 안내하고 일반 스케줄링으로 계속 동작. CEF 렌더러/컴포지터 스레드는 그대로 둠. 실시간 스레드는 모두 대기(sleep/wait) 위주라 기아 위험이 낮고 커널 RT 스로틀(95%)이 안전망.
+- **권한 부여(단말, 1회)**: `sudo sh -c 'echo "pi - rtprio 90" > /etc/security/limits.d/99-cg-rt.conf'` 후 **다시 로그인**해야 적용(`ulimit -r` 이 90 으로 보임). `bin/start.sh` 는 `ulimit -r` 이 0 이면 안내를 출력. setcap 은 CEF 하위 프로세스/라이브러리 경로(AT_SECURE) 때문에 쓰지 않음.
+- 검증(단말): 로그 `[rt] cg-encode: SCHED_FIFO 50` 등 6개, `ps -L` 에서 해당 스레드가 `FF`(FIFO) 우선순위 50/49/48/47 로 표시. 미리보기 `draw_gap_max` 는 보통 18~19ms(이전 타이머 방식은 `drawn=63/s`, 틱 간격 어긋남). 주관적 부드러움은 사용자 확인("지금 잘되는 것 같다").
+- 주의: 확인용 ssh 명령 문자열에 `cg-streamer --run` 같은 패턴을 쓰면 `start.sh` 의 `pgrep -f` 가 그 셸을 스트리머로 오인해 시작을 건너뜀(이번에도 한 번 발생, 로그만 보고 정상으로 착각할 뻔함). 확인할 때는 스크립트 파일로 올려 실행하거나 `ps -eo pid,args | grep "[.]/cg-streamer"` 사용.
 
-- 배경: 해상도 자동 설정이 `start.sh` 실행 시점에만 돼서, 스트리머를 켜 둔 채 모니터를 바꿔 꽂으면(`xrandr --fb` 로 고정된 X 화면 + 시작 시 한 번 만든 미리보기 창) 반영이 안 됨.
-- `bin/display.sh` 신설: 연결된 첫 출력의 권장 모드 적용 + 연결 안 된 출력 `--off` + X 화면 크기(`--fb`)를 같게(커지는 경우/작아지는 경우 모두 되도록 fb→모드→fb 순서로 시도). `start.sh` 가 스트리머 시작 전에 `bash ./display.sh` 로 호출(기존 인라인 코드를 이 스크립트로 이동). `.gitignore` 에 `!bin/display.sh`.
-- cg-streamer(`ApplyDisplay`): 별도 스레드에서 `display.sh` 를 실행한 뒤 현재 X 화면 크기를 읽어 **미리보기 창 크기와 다르면** `PreviewLoop` 를 다시 돌려 창/버퍼를 새 크기로 재생성(`PreviewRun` 이 true 를 반환). 같은 크기면 아무것도 안 해서 화면 깜박임 없음. 송출(인코딩/UDP)은 끊기지 않음.
-- 호출 시점: **Reload saved project**(`POST /reload`), **Switch project**(`POST /switch`) 때 자동 + 단독 명령 `POST /display`(에디터 `/ctl/display` 중계로도 가능). 에디터 UI 는 변경 없음(기존 두 버튼이 같은 엔드포인트를 씀).
-- 검증(단말): 해상도를 일부러 1280x720 으로 바꿔 둔 뒤 `POST /display`·`/reload` → 1024x600(연결된 모니터 권장)으로 복귀. 화면 크기가 달라지는 경우 `[display] 화면 크기 변경 1280x720 -> 1024x600: 미리보기 창 다시 만듦` 로그와 함께 창이 새 크기로 재생성됨.
-- 한계: 모니터를 바꿔 꽂은 뒤 **Reload/Switch project(또는 /display)를 눌러야** 반영됨(핫플러그 자동 감지는 아님). Chromium 키오스크 창 크기는 이 경로로 갱신하지 않음.
+### 7) 그룹으로 묶은 개체 중 하나만 선택/편집 (Alt+클릭, 더블클릭)
 
-## 2026-10-02 (이어서) — 로컬 HDMI 화면 해상도 맞춤 + 로컬 HDMI 로도 음성 재생
 
-### 로컬 화면(HDMI 2) 해상도가 안 맞던 문제 (`bin/start.sh`)
-- 증상: output=3(HDMI+UDP)에서 로컬 모니터에 화면이 잘려 나옴. 원인: HDMI-2 모니터는 1024x600 모드인데 X 화면(프레임버퍼)은 1920x1080 이고, 미리보기 창(`PreviewLoop`)은 X 화면 크기로 만들어져 왼쪽 위 1024x600 만 보였음. 기존 `xrandr` 모드 설정은 스트리머가 뜬 *뒤* 키오스크 단계에서만 해서 늦었음.
-- 수정: 스트리머 시작 *전에* 연결된 첫 출력의 권장(첫) 모드 적용 + 연결 안 된 출력 `--off` + `xrandr --fb <모드>` 로 X 화면 크기도 맞춤. 모니터가 바뀌면 그 모니터 권장 해상도로 자동 적용(`start.sh` 실행 시점에만 적용, 이후 모니터 교체는 stop/start 필요). 다른 모니터(1920x1080 전용)로 바뀐 뒤에도 미리보기 창이 1920x1080 으로 맞게 시작됨.
-- 송출은 1920x1080 고정이라 1024x600(1.71:1) 모니터에서는 가로가 약 4% 늘어남(비율 유지 레터박스는 미구현).
+- 증상: `가로스크롤-예제` 하단 자막(여러 개체)을 그룹으로 묶자, 그 안의 crawl 이 걸린 개체의 속성/효과를 따로 설정할 수 없음. 원인: 그룹은 `groupId` 로 묶이고 `selectedIds` 가 멤버 하나를 클릭해도 **그룹 전체를 선택**, 속성 변경(`patch`)은 선택된 모든 멤버에 적용됨.
+- 수정(에디터): 그룹을 무시하고 **그 개체 하나만** 선택하는 방법 추가. `selectedIds(..., single)`, `select(id, toggle, single)`.
+  - 캔버스: **Alt+클릭** 또는 **더블클릭**(그룹 멤버 / 글자 개체는 편집 모드 진입과 함께 그 개체만 선택).
+  - 타임라인: 개체 아이콘 **Alt+클릭**, 막대를 **Alt+드래그**하면 그 개체만 이동/조절(그룹 동료는 같이 움직이지 않음).
+  - 일반 클릭은 이전처럼 그룹 전체 선택(이동/복사 등 그룹 동작 유지). 도움말에 사용법 한 줄 추가.
+- 참고: 그룹 해제 없이도 개체별 Effects(Crawl 등) 설정 가능. Windows 브라우저에서 Alt 를 눌렀다 떼면 메뉴바가 활성화될 수 있어 불편하면 더블클릭을 쓰면 됨.
 
-### 로컬 HDMI 로도 음성 재생 (output=3, `cgsetup.cfg audio_out`)
-- 이전까지 음성은 AAC 로 TS(UDP)에만 들어가고 로컬 HDMI 에는 안 나갔음. `AudioMixer` 가 송출용으로 만든 같은 믹스(영상 mp4 음성 + HDMI 입력 음성)를 ALSA 재생 장치로도 내보내도록 추가(`LocalRun` 스레드: 블록 큐 → `snd_pcm_writei`, libasound dlopen, 장치 없음/에러 시 닫고 재시도, 큐는 8블록 상한으로 송출을 막지 않음).
-- 설정: `cgsetup.cfg` 의 `audio_out` = `auto`(기본, output=3 일 때 연결된 HDMI 커넥터의 소리 카드: HDMI-A-1→`rockchiphdmi0`, HDMI-A-2→`rockchiphdmi1`) / `off` / ALSA 장치명.
-- 구현 중 버그 2건: (1) 음성 설정을 `LoadSetupCfg` 이전에 읽어 항상 꺼져 있었음 → 로딩 이후로 이동. (2) printf 문자열 개행 이스케이프 오류로 빌드 실패.
-- 검증: 단말에서 `[audio] 로컬 출력 시작: plughw:CARD=rockchiphdmi1,DEV=0` 로그 확인, HDMI 캡처 반복 로그 없음. 실제 소리/지연(영상 대비)은 사용자 확인 필요.
-- 운영 메모: 단말의 `bin/cgsetup.cfg`(udp_ip=10.10.10.11)처럼 로컬 수정이 있으면 `git pull` 이 막히므로 `git stash` → `git pull` → `git stash pop` 사용.
+### 8) Effects 번호(001~)가 뭐가 다른지 표시
 
-## 2026-10-02 — HDMI 입력 음성이 무음으로 송출되던 문제 수정
 
-### 증상
-- cg-streamer 가 HDMI IN(`rk_hdmirx`) 라이브 소스일 때 음성도 AAC 로 인코딩해 TS 로 보내는데, 송출 TS 의 음성이 완전 무음(-91dB)이고 player 에서 소리가 안 남.
-  로그에는 `[hdmirx] 음성 캡처 시작`이 수천 번 반복(캡처를 열자마자 read 실패 → 복구 실패 → 닫고 재오픈 루프). mp4 영상의 음성은 정상(-11dB).
+- 증상: Effects 탭의 효과별 번호 버튼(001~015)이 번호만 있고 무엇이 다른지 알 수 없음(Cut/Fade/Curl/Tile/Banner/Text/Crawl/Roll 은 미리보기가 비어 있음. 색 문제가 아니라 내용이 없었음).
+- 조사(`effects.ts` `visual()` 기준 번호의 실제 의미):
+  - Move: 001~004 좌/우/상/하에서 들어옴, 005~008 모서리(오른쪽 위/왼쪽 위/오른쪽 아래/왼쪽 아래)에서 대각선, 009~012 는 005~008 과 같음.
+  - Scale: 001~004 좌/우/상/하 끝 기준, 005 가로로만, 006 세로로만. Wipe/Banner/Curl: 번호%8 이 모양(좌/우/상/하/가운데 가로/가운데 세로/대각 2종), 009 이상은 앞 번호와 같은 모양. Banner 는 번호 홀짝으로 기울기(±8°), Curl 은 말림. Organic: 번호%3 = 사각형/가로 조각/원 + 번호마다 무작위 순서. Tile: 번호%3 = 동시/대각선/무작위.
+  - **Crawl/Roll/Text**: 번호(`effectPreset`)는 아무 영향이 없고 방향만 바뀜. Crawl 은 왼쪽/오른쪽(위/아래는 왼쪽으로 처리), Roll 은 위/아래만 의미 있음.
+- 수정(`effects.ts` `presetInfo/presetCount/presetDirection`, `attributes.tsx`): 번호 버튼마다 **기호 + 짧은 글자 + 마우스를 올리면 나오는 설명(title)**. 의미 없는 번호는 정리: Crawl 2개(←/→), Roll 2개(↑/↓), Text/Cut/Fade/Blink 1개. 번호를 누를 때 방향도 효과에 맞게 지정(Crawl: 좌/우, Roll: 상/하).
+- 기존 프로젝트: 저장된 `effectPreset`/`direction` 값은 그대로라 재생은 달라지지 않음(Crawl/Roll 에서 정리된 번호 밖 값은 번호 버튼 강조만 안 보임).
 
-### 진단 (테스트 단말 CM3588, 커널 6.1.141)
-- 송출을 단말 자신(`CG_UDP=10.10.10.56:1234`)으로 보내 `ffmpeg -c copy` 로 받아 `ffprobe`/`volumedetect` 로 확인. 스트림 구조(H.264 + AAC 48k 스테레오)는 정상, 음성 값만 무음.
-- 스트리머 없이 `arecord -D plughw:CARD=rockchiphdmiin,DEV=0 -f S16_LE -r 48000 -c 2` 도 `read error: Input/output error`. HDMI 수신기 쪽은 `audio_present: 1`, `audio on`(48000/2ch).
-- 사용자가 `arecord -D hw:0,0 ... --period-size=1024 --buffer-size=4096` 은 된다고 알려 줌. 그래서 버퍼 크기가 원인인지 확인했는데 `--buffer-time=100000` 만 줘도 되고 기본값만 안 됨 → 크기 문제가 아니었음.
-- python ctypes 로 앱과 같은 호출(`snd_pcm_open` → `snd_pcm_set_params(…, 100000)` → `snd_pcm_readi`)을 재현: `readi` 가 계속 -5(EIO). 사이에 `snd_pcm_start()` 를 넣으면 `[1024, 1024, …]` 로 정상 + 실제 신호. `hw_params` 로 period 1024/buffer 4096 을 직접 지정해도 정상.
-- **원인**: 이 보드(rk_hdmirx 캡처 카드)는 `readi` 의 자동 시작(PREPARED → 시작)이 EIO 로 실패해서, 열고 나서 `snd_pcm_start()` 를 명시적으로 불러야 한다.
+### 9) Effects 시간 항목 이름 변경 (Duration/Length/Begin)
 
-### 수정 (`src/cg-streamer/hdmirx_source.cpp`, 커밋 af92fae)
-- libasound 를 dlopen 하는 `AudioRun` 에 `snd_pcm_start` 심볼 추가. 캡처를 열고 `set_params` 직후 `start` 호출(실패하면 닫고 500ms 뒤 재시도).
-- 에러 복구(`snd_pcm_recover`) 뒤에도 `start` 를 다시 호출. recover/start 가 실패하면 닫고 다시 연다.
 
-### 검증
-- 단말에서 `git pull` → `cmake --build --preset rk3588` 빌드 성공 → `수영-기록` 프로젝트(HDMI 소스)를 자기 자신으로 송출해 받아 확인: 음성 mean -25.8dB / max -10.3dB(수정 전 -91dB 무음), `음성 캡처 시작` 로그 1회(반복 없음). 이후 사용자가 player 에서 소리가 나옴을 확인.
+- 혼란: `Duration`(효과가 진행되는 시간)과 `Length`(개체가 화면에 떠 있는 전체 시간)가 둘 다 "시간 길이"로 읽혀 구분이 안 됨, `Begin` 도 무엇의 시작인지 불분명.
+- 변경(`attributes.tsx` 라벨만, 저장 필드명 `inDuration/outDuration/start/duration` 은 그대로라 기존 프로젝트 호환): **Duration → In Duration / Out Duration**(위의 In/Out 선택에 따라 바뀜; 처음엔 In Time/Out Time 으로 했다가 요청으로 Duration 유지), **Length → Show Time**, **Begin → Start Time**. Speed 유지. 각 항목에 마우스를 올리면 설명(title) 표시, 도움말에도 설명 추가.
+- Crawl/Roll 은 In/Out 시간을 쓰지 않으므로(진행이 Show Time 전체에 걸쳐 0→100%) 해당 효과를 선택하면 In/Out Duration 입력을 비활성화하고 툴팁에 안내.
 
-### 운영 메모
-- 단말에서 ssh 로 `pgrep -f "cg-streamer --run"` 처럼 패턴을 명령줄에 포함하면 ssh 로 실행한 셸 자신이 매칭돼서 `start.sh` 가 "이미 실행 중"으로 오인해 시작을 건너뜀(실제로 스트리머가 안 뜬 채 지나갈 뻔함). 확인할 때는 `ps -eo pid,etime,args | grep "[.]/cg-streamer"` 처럼 쓸 것.
-- 비대화형 ssh(비밀번호)가 필요하면 `SSH_ASKPASS` 스크립트 + `SSH_ASKPASS_REQUIRE=force` 로 가능(sshpass 없는 Windows Git Bash).
-- 단말의 `bin/cgsetup.cfg`, `bin/project/가로스크롤-예제.json` 에 로컬 수정이 남아 있음(의도 확인 필요).
-- 페이지 전환(`next` 명령) 테스트 중 로그에 `*** stack smashing detected ***` 가 한 번 찍힘(프로세스는 계속 동작). 원인 미확인 — 재현되면 추적.
+### 10) Attributes 가운데 칸(Name/자막 내용) 폭 축소
+
+
+- Attributes 탭 가운데 칸(`.textproperties`: Name 입력, 자막 내용 입력, 선택 안내 + 전체 적용 버튼)의 폭을 `flex:0 0 239px` → **140px** 로 줄임(`globals.css` 마지막 덮어쓰기 규칙). 줄어든 폭은 나머지 칸이 가져감. 안내 문구는 줄바꿈되어 표시. Font 칸(`.fontproperties`)도 `285px` → **250px** 로 조금 줄임. 오른쪽 색 대상 버튼(F/E-1/E-2/E-3/S, `.facebuttons`)은 줄바꿈을 막고 한 줄로 배치: 5개를 **같은 너비**(`flex:1 1 0`)로 칸 끝까지 채우고 간격 2px(색 띠 10→5px, 칸 최소 폭 140px). `space-between` 은 버튼 너비가 제각각이라 되돌림. 각 버튼에 마우스를 올리면 의미 설명(툴팁): F=Face(글자 면), E-1/E-2/E-3=Edge 1~3(바깥으로 겹쳐 두르는 3중 테두리, 두께 0이면 안 보임), S=Shadow(그림자). 더 줄이거나 늘리려면 같은 줄의 `140px`/`250px` 만 바꾸면 됨.
+
+### 11) 마우스 드래그 범위 선택(큰 개체 위에서도), 그룹 묶기/해제, 색 버튼 설명
+
+
+- 증상: 여러 개체를 마우스로 드래그해 선택하고 싶은데 안 됨. 원인: 범위 선택(marquee)은 **빈 배경(`bg`)에서 눌렀을 때만** 시작되는데, `가로스크롤-예제` 처럼 영상/배경 개체가 화면 전체를 덮으면 빈 곳이 없음.
+- 수정(`editor-canvas.tsx`): 화면을 덮는 개체(`bgLike`: 영상 / 고정 / 잠금 / 면적이 화면의 60% 이상)는 **선택되어 있지 않을 때** 그 위에서 드래그하면 개체 이동 대신 범위 선택이 시작됨. 마우스를 떼면: 범위가 있으면 선택(덮는 개체는 선택 대상에서 제외), 거의 안 움직였으면(클릭) 그 개체가 선택됨. 이미 선택된 덮는 개체는 전과 같이 드래그로 이동. 더블클릭/Alt+클릭은 기존 동작.
+- **Shift/Ctrl+드래그**는 기존 선택에 추가(합집합). 선택 후 기존 그룹 묶기 버튼(Ctrl+G)/그룹 해제 버튼(Ctrl+Shift+G)을 그대로 사용(코드 변경 없음).
+- 도움말(사용 방법)에 범위 선택·추가 선택·그룹 방법, 단축키 목록(`드래그 / Shift·Ctrl+드래그`), 색 설정 F/E-1/E-2/E-3/S 의 의미(Face / Edge 1~3 / Shadow)를 추가. 색 버튼은 글자로 풀어 쓰면 칸을 벗어나므로 이름은 그대로 두고 툴팁 + 도움말로 설명.
+- 우클릭 컨텍스트 메뉴 항목에 아이콘 추가(lucide): 복사(Copy) · 붙여넣기(ClipboardPaste) · 그룹(Group) · 그룹 해제(Ungroup) · 화면 전체 크기로(Maximize2) · 배경객체 고정(Pin) · 위치 고정 해제(UnlockKeyhole) · 숨기기(EyeOff) · 삭제(Trash2) · 닫기(X). 항목은 [이름, 동작, 아이콘] 으로 정의.
+- 참고: 화면 60% 이상을 차지하는 개체는 드래그 이동이 막히므로(먼저 클릭해 선택하면 이동 가능) 위치는 Attributes 의 X/Y 로도 바꿀 수 있음.
 
 ## 2026-10-01 (이어서 3) — 업스트림 병합, start.sh 기본 production, 패널 배치, stop.sh 보강
 
