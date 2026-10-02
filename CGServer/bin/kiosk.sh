@@ -7,6 +7,13 @@ set -u
 cd "$(dirname "$(readlink -f "$0")")"
 mkdir -p .run log
 export DISPLAY=${DISPLAY:-:0}
+# 한글 입력(fcitx5): ssh 로 start.sh 를 실행하면 데스크탑 세션의 입력기 환경이 없어서 한글이 안 된다 -> 여기서 넣어 준다.
+export GTK_IM_MODULE=fcitx QT_IM_MODULE=fcitx XMODIFIERS=@im=fcitx
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then   # fcitx5 와 통신하려면 데스크탑 세션의 D-Bus 주소가 필요(없으면 xfce4-session 에서 가져옴)
+  _sp=$(pgrep -u "$(id -u)" -x xfce4-session | head -1)
+  [ -n "$_sp" ] && export DBUS_SESSION_BUS_ADDRESS=$(tr '\0' '\n' < "/proc/$_sp/environ" 2>/dev/null | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p')
+fi
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 CHROMIUM=/opt/chromium.org/stable/chromium-browser
 KIOSK_PROFILE=/tmp/cg-editor-kiosk-$(id -un)   # 사용자별 폴더(root 로 만든 폴더가 남아 있으면 다른 계정이 못 써서 Chromium 이 안 뜸)
 PIDF=.run/kiosk-chromium.pid
