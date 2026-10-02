@@ -32,7 +32,15 @@ start() {
   if read -r gx gy gw gh < .run/display-editor.geom 2>/dev/null && [ -n "${gh:-}" ]; then
     pos=(--window-position="$gx,$gy" --window-size="$gw,$gh")
   fi
-  setsid nohup "$CHROMIUM" --kiosk "${pos[@]}" --noerrdialogs --disable-infobars --no-first-run \
+  # 에디터는 큰 화면(1600x900 이상) 기준이라 작은 모니터(예: 1024x600)에서는 패널이 잘린다 -> 배율을 낮춰 더 넓은 화면처럼 보이게 한다.
+  # cgsetup.cfg 의 editor_scale: auto(기본: 모니터가 1600x900 보다 작으면 그 비율로 축소) 또는 숫자(예: 0.64, 1 이면 축소 안 함)
+  local scale
+  scale=$(sed -n 's/#.*//; s/^[[:space:]]*editor_scale[[:space:]]*=[[:space:]]*\(.*[^[:space:]]\)[[:space:]]*$/\1/p' cgsetup.cfg 2>/dev/null | tail -1)
+  if [ -z "$scale" ] || [ "$scale" = auto ]; then
+    scale=$(awk -v w="${gw:-1600}" -v h="${gh:-900}" 'BEGIN{s=w/1600; t=h/900; if(t<s)s=t; if(s>1)s=1; printf "%.2f", s}')
+  fi
+  pos+=(--force-device-scale-factor="$scale")
+  setsid nohup "$CHROMIUM" --kiosk "${pos[@]}" --noerrdialogs --disable-infobars --no-first-run --disable-features=Translate \
     --user-data-dir="$KIOSK_PROFILE" "http://localhost:$port" \
     > log/chromium-kiosk.log 2>&1 &
   echo $! > "$PIDF"
