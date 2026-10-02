@@ -954,18 +954,6 @@ static bool AcquireRunLock() {
 }
 
 int main(int argc, char* argv[]) {
-  if (g_output_type == 3 && g_audio_out != "off") {   // HDMI+UDP 동시: 송출과 같은 음성을 로컬 HDMI 로도 재생
-    std::string dev = g_audio_out;
-    if (dev == "auto" || dev.empty()) {   // 연결된 HDMI 커넥터 -> 소리 카드 (HDMI-A-1=rockchiphdmi0, HDMI-A-2=rockchiphdmi1)
-      dev.clear();
-      for (int i = 1; i <= 2 && dev.empty(); i++) {
-        std::ifstream st("/sys/class/drm/card0-HDMI-A-" + std::to_string(i) + "/status");
-        std::string s;
-        if (st >> s && s == "connected") dev = "plughw:CARD=rockchiphdmi" + std::to_string(i - 1) + ",DEV=0";
-      }
-    }
-    if (!dev.empty()) g_audio.SetLocalOut(dev);
-  }
   g_video.SetAudio(&g_audio);
   g_hdmi.SetAudio(&g_audio);
   CefMainArgs main_args(argc, argv);
@@ -984,6 +972,18 @@ int main(int argc, char* argv[]) {
   g_paint_fps = g_fps;   // cfg 의 fps 를 CEF 페인트 fps 기본값에도 반영 (--paint-fps= 로 다시 덮어쓸 수 있음)
   if (g_output_type == 1) { g_view = true; g_encode = false; }  // HDMI 직결만: 로컬 전체화면, 인코딩/UDP 없음
   else if (g_output_type == 3) g_preview = true;                // HDMI+UDP 동시: 인코딩 결과를 로컬 창에도 표시
+  if (g_output_type == 3 && g_audio_out != "off") {   // HDMI+UDP 동시: 송출과 같은 음성을 로컬 HDMI 로도 재생
+    std::string dev = g_audio_out;
+    if (dev == "auto" || dev.empty()) {   // 연결된 HDMI 커넥터 -> 소리 카드 (HDMI-A-1=rockchiphdmi0, HDMI-A-2=rockchiphdmi1)
+      dev.clear();
+      for (int i = 1; i <= 2 && dev.empty(); i++) {
+        std::ifstream st("/sys/class/drm/card0-HDMI-A-" + std::to_string(i) + "/status");
+        std::string s;
+        if (st >> s && s == "connected") dev = "plughw:CARD=rockchiphdmi" + std::to_string(i - 1) + ",DEV=0";
+      }
+    }
+    if (!dev.empty()) g_audio.SetLocalOut(dev);
+  }
 
   int seconds = 0;
   for (int i = 1; i < argc; i++) {
