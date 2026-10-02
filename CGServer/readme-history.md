@@ -1,5 +1,9 @@
 # 작업 히스토리 (cef_mpp / zcgserver)
 
+## 2026-10-02 (이어서 9) — Attributes 가운데 칸(Name/자막 내용) 폭 축소
+
+- Attributes 탭 가운데 칸(`.textproperties`: Name 입력, 자막 내용 입력, 선택 안내 + 전체 적용 버튼)의 폭을 `flex:0 0 239px` → **140px** 로 줄임(`globals.css` 마지막 덮어쓰기 규칙). 줄어든 폭은 나머지 칸이 가져감. 안내 문구는 줄바꿈되어 표시. 더 줄이거나 늘리려면 이 한 줄의 `140px` 만 바꾸면 됨.
+
 ## 2026-10-02 (이어서 8) — Effects 시간 항목 이름 변경 (Duration/Length/Begin)
 
 - 혼란: `Duration`(효과가 진행되는 시간)과 `Length`(개체가 화면에 떠 있는 전체 시간)가 둘 다 "시간 길이"로 읽혀 구분이 안 됨, `Begin` 도 무엇의 시작인지 불분명.
