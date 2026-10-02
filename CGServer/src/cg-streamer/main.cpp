@@ -1246,7 +1246,7 @@ int main(int argc, char* argv[]) {
 
     if (g_encode) enc_thread = std::thread(EncodeLoop, client);
     if (g_preview) preview_thread = std::thread(PreviewLoop);
-    if (g_preview || g_output_type == 1) display_thread = std::thread(DisplayWatch);
+    if ((g_preview || g_output_type == 1) && !getenv("CG_NO_DISPWATCH")) display_thread = std::thread(DisplayWatch);   // 시험용: CG_NO_DISPWATCH=1 이면 감시 스레드를 켜지 않음
     udp_thread = std::thread(UdpLoop, client);
     http_thread = std::thread(HttpLoop, client);
     watcher = std::thread([&] {
