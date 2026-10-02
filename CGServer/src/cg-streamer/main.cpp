@@ -805,6 +805,13 @@ static void UdpLoop(CefRefPtr<Client> client) {
 // PUT  /text/{linkName}  본문 {"text":"..."} (UTF-8)       GET /status      POST /quit
 // 명령은 CEF UI 스레드에서 cg.cmd(이름, 인자, 본문) 으로 실행되고, 응답은 접수 결과만 돌려준다.
 // JS 문자열은 JsQuote 로 이스케이프해서 넘기므로 요청 내용이 코드로 해석되지 않는다.
+// 프로젝트 다시 읽기. 적용된 프로젝트가 없는(대기 중, 프레임 루프가 안 도는) 플레이어는 cg.cmd 로는 시작이 안 되므로 페이지를 새로 불러온다.
+static std::string ReloadJs() {
+  bool idle;
+  { std::lock_guard<std::mutex> lk(g_state_mu); idle = g_state.find("\"ready\":true") == std::string::npos; }
+  return idle ? "location.reload()" : "cg.cmd(\"reload\",\"\",\"\")";
+}
+
 static std::string JsQuote(const std::string& s) {
   std::string o = "\"";
   for (unsigned char c : s) {
@@ -927,7 +934,7 @@ static void HttpHandle(int fd, CefRefPtr<Client> client) {
       std::ofstream(run_dir / "last-project", std::ios::binary | std::ios::trunc) << body;
     }
     ApplyDisplay();   // 모니터를 바꿔 꽂았을 수 있으니 해상도도 다시 맞춤
-    CefPostTask(TID_UI, base::BindOnce(&Client::Exec, client, std::string("cg.cmd(\"reload\",\"\",\"\")")));
+    CefPostTask(TID_UI, base::BindOnce(&Client::Exec, client, ReloadJs()));
     return HttpReply(fd, 200, "{\"ok\":true}");
   } else if (seg.size() == 1 && name == "display") {   // 로컬 화면 해상도만 다시 맞춤
     ApplyDisplay();
@@ -948,7 +955,7 @@ static void HttpHandle(int fd, CefRefPtr<Client> client) {
   }
   if (!ok) return HttpReply(fd, 404, "{\"ok\":false,\"error\":\"unknown command\"}");
 
-  const std::string js = "cg.cmd(" + JsQuote(name) + "," + JsQuote(arg) + "," + JsQuote(payload) + ")";
+  const std::string js = name == "reload" ? ReloadJs() : "cg.cmd(" + JsQuote(name) + "," + JsQuote(arg) + "," + JsQuote(payload) + ")";
   CefPostTask(TID_UI, base::BindOnce(&Client::Exec, client, js));
   HttpReply(fd, 200, "{\"ok\":true}");
 }
