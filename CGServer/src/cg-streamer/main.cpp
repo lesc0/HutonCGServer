@@ -73,6 +73,7 @@
 // X11 은 CEF 헤더 뒤에 포함(Success/None 등 매크로가 CEF의 동명 심볼과 충돌).
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/Xatom.h>
 #include <X11/extensions/XShm.h>
 #include <X11/extensions/shape.h>
 #include <sys/ipc.h>
@@ -702,6 +703,7 @@ static int PreviewRun() {
   // 있어서(정식 창으로 바꾸니 해결) 쓰지 않는다. CG_PV_STYLE=override 로 예전 방식을 시험할 수 있다.
   const char* pv_style = getenv("CG_PV_STYLE");
   const bool pv_override = pv_style && !strcmp(pv_style, "override");
+  const bool pv_borderless = pv_style && !strcmp(pv_style, "borderless");   // 창 관리자가 관리하되 제목 표시줄/테두리 없음
   XSetWindowAttributes attrs{};
   attrs.override_redirect = pv_override ? True : False;
   attrs.background_pixel = BlackPixel(dpy, screen);
@@ -714,6 +716,14 @@ static int PreviewRun() {
     sz.flags = USPosition | USSize | PPosition | PSize;   // 위치/크기를 창 관리자에 요청(송출 모니터 영역)
     sz.x = gx; sz.y = gy; sz.width = sw; sz.height = sh;
     XSetWMNormalHints(dpy, win, &sz);
+    if (pv_borderless) {
+      const Atom mwm = XInternAtom(dpy, "_MOTIF_WM_HINTS", False);
+      long mh[5] = {2, 0, 0, 0, 0};   // flags=MWM_HINTS_DECORATIONS, decorations=0 (장식 없음)
+      XChangeProperty(dpy, win, mwm, mwm, 32, PropModeReplace, reinterpret_cast<unsigned char*>(mh), 5);
+      Atom st[3] = {XInternAtom(dpy, "_NET_WM_STATE_ABOVE", False), XInternAtom(dpy, "_NET_WM_STATE_SKIP_TASKBAR", False),
+                    XInternAtom(dpy, "_NET_WM_STATE_SKIP_PAGER", False)};
+      XChangeProperty(dpy, win, XInternAtom(dpy, "_NET_WM_STATE", False), XA_ATOM, 32, PropModeReplace, reinterpret_cast<unsigned char*>(st), 3);
+    }
     XMapWindow(dpy, win);
     XSync(dpy, False);
     XWindowAttributes wa{};   // 창 관리자가 제목 표시줄만큼 줄였을 수 있으니 자리가 잡힐 때까지 기다린 뒤 실제 크기를 쓴다
