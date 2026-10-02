@@ -8,15 +8,15 @@
 set -eu
 [ "$(id -u)" != 0 ] || { echo "일반 사용자(pi)로 실행하세요 (설정이 사용자 홈에 저장됨)"; exit 1; }
 
-echo "[1/5] 패키지 설치 (fcitx5, 한글 엔진, GTK/Qt 연동, 설정 도구, 나눔 글꼴)"
+echo "[1/6] 패키지 설치 (fcitx5, 한글 엔진, GTK/Qt 연동, 설정 도구, 나눔 글꼴)"
 sudo apt-get update -qq
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   fcitx5 fcitx5-hangul fcitx5-frontend-gtk2 fcitx5-frontend-gtk3 fcitx5-frontend-qt5 fcitx5-config-qt fcitx5-module-xorg im-config fonts-nanum
 
-echo "[2/5] 입력기를 fcitx5 로 선택 (로그인할 때 GTK_IM_MODULE/QT_IM_MODULE/XMODIFIERS=fcitx 와 fcitx5 자동 시작)"
+echo "[2/6] 입력기를 fcitx5 로 선택 (로그인할 때 GTK_IM_MODULE/QT_IM_MODULE/XMODIFIERS=fcitx 와 fcitx5 자동 시작)"
 im-config -n fcitx5
 
-echo "[3/5] 입력 방식과 전환 키 설정"
+echo "[3/6] 입력 방식과 전환 키 설정"
 mkdir -p ~/.config/fcitx5/conf ~/.config/autostart
 # 영문(us)과 한글(hangul) 두 가지, 시작은 영문
 cat > ~/.config/fcitx5/profile <<'CFG'
@@ -65,7 +65,7 @@ Exec=fcitx5 -d
 X-GNOME-Autostart-enabled=true
 CFG
 
-echo "[4/5] Chromium 런처를 한글 입력 환경으로 (바탕화면 아이콘 + 응용 프로그램 메뉴)"
+echo "[4/6] Chromium 런처를 한글 입력 환경으로 (바탕화면 아이콘 + 응용 프로그램 메뉴)"
 # 지금 떠 있는 데스크탑 세션은 ibus 환경으로 시작됐을 수 있어서, 런처가 직접 입력기 환경변수를 넣는다. 재로그인 후에도 문제 없음.
 LAUNCHER=$(mktemp)
 cat > "$LAUNCHER" <<'CFG'
@@ -95,7 +95,20 @@ chmod +x ~/.local/share/applications/chromium-browser.desktop
 rm -f "$LAUNCHER"
 update-desktop-database ~/.local/share/applications 2>/dev/null || true
 
-echo "[5/5] 지금 세션에서도 fcitx5 시작(이미 떠 있으면 건너뜀)"
+echo "[5/6] 오른쪽 Alt 를 한/영 키로 (미국식 키보드에는 한/영 키가 없음)"
+# 한/영 키가 없는 키보드(예: Logitech K370s 미국 배열)용: 오른쪽 Alt = Hangul(한/영), 오른쪽 Ctrl = Hangul_Hanja(한자).
+# fcitx5 의 전환 키 목록에 Hangul 이 들어 있어서 이것만 연결하면 된다. 로그인마다 적용되도록 자동 시작 항목으로 둔다.
+cat > ~/.config/autostart/xkb-hangul.desktop <<'CFG'
+[Desktop Entry]
+Type=Application
+Name=Korean keys (Right Alt = Hangul)
+Comment=오른쪽 Alt 를 한/영, 오른쪽 Ctrl 을 한자 키로
+Exec=setxkbmap -option korean:ralt_hangul,korean:rctrl_hanja
+X-GNOME-Autostart-enabled=true
+CFG
+[ -n "${DISPLAY:-}" ] && setxkbmap -option korean:ralt_hangul,korean:rctrl_hanja 2>/dev/null || true
+
+echo "[6/6] 지금 세션에서도 fcitx5 시작(이미 떠 있으면 건너뜀)"
 if [ -n "${DISPLAY:-}" ]; then
   if pgrep -u "$(id -u)" -x fcitx5 >/dev/null; then
     echo "  이미 실행 중"
@@ -113,7 +126,7 @@ fi
 cat <<'MSG'
 
 완료. 사용법:
-  - 한글 전환: 키보드의 한/영 키, Shift+Space, Ctrl+Space (시작은 영문)
+  - 한글 전환: 오른쪽 Alt(한/영 키가 있는 키보드는 그 키), Shift+Space, Ctrl+Space (시작은 영문). 오른쪽 Ctrl 은 한자 키.
   - 브라우저(Chromium)는 먼저 열려 있는 창을 모두 닫고, 바탕화면의 Chromium 아이콘으로 여세요(이미 떠 있는 Chromium 에 붙으면 예전 환경이라 한글이 안 됩니다).
   - 로그아웃 후 다시 로그인하면 모든 프로그램에서 한글이 됩니다.
 MSG

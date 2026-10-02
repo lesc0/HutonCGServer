@@ -215,11 +215,12 @@ cd /root/work/github.cgserver/CGServer/bin
 2. `im-config -n fcitx5` — 로그인할 때 `GTK_IM_MODULE=fcitx`, `QT_IM_MODULE=fcitx`, `XMODIFIERS=@im=fcitx` 환경변수와 fcitx5 자동 시작(`~/.xinputrc`)
 3. `~/.config/fcitx5/{profile,config,conf/hangul.conf}` — 입력 방식(영문 us + 한글 hangul, 시작은 영문), 전환 키, 두벌식
 4. `~/.config/autostart/fcitx5.desktop` — 로그인 때 `fcitx5 -d` 자동 시작(이미 떠 있으면 두 번째는 종료)
-5. **Chromium 런처**(바탕화면 아이콘 + 응용 프로그램 메뉴)를 `env GTK_IM_MODULE=fcitx QT_IM_MODULE=fcitx XMODIFIERS=@im=fcitx /usr/bin/chromium-browser %U` 로 교체(바탕화면 아이콘의 원본은 `~/.config/cg-backup/Desktop-chromium-browser.desktop.orig` 에 보관)
-6. 지금 세션에서도 fcitx5 시작
+5. **오른쪽 Alt = 한/영, 오른쪽 Ctrl = 한자**: 미국식 키보드(예: Logitech K370s)에는 한/영 키가 없어서 `~/.config/autostart/xkb-hangul.desktop` 으로 로그인마다 `setxkbmap -option korean:ralt_hangul,korean:rctrl_hanja` 를 적용(지금 세션에도 즉시 적용). 한/영 키가 있는 키보드는 그 키가 그대로 `Hangul` 로 동작.
+6. **Chromium 런처**(바탕화면 아이콘 + 응용 프로그램 메뉴)를 `env GTK_IM_MODULE=fcitx QT_IM_MODULE=fcitx XMODIFIERS=@im=fcitx /usr/bin/chromium-browser %U` 로 교체(바탕화면 아이콘의 원본은 `~/.config/cg-backup/Desktop-chromium-browser.desktop.orig` 에 보관)
+7. 지금 세션에서도 fcitx5 시작
 
 ### 사용
-- 한/영 전환: 키보드의 **한/영 키**, **Shift+Space**, **Ctrl+Space** (시작은 영문). 전환 키를 바꾸려면 `~/.config/fcitx5/config` 의 `[Hotkey/TriggerKeys]` 수정 후 `fcitx5 -r` (또는 `fcitx5-configtool`).
+- 한/영 전환: **오른쪽 Alt**(한/영 키가 있는 키보드는 그 키), **Shift+Space**, **Ctrl+Space** (시작은 영문). 오른쪽 Ctrl 은 한자 키. 전환 키를 바꾸려면 `~/.config/fcitx5/config` 의 `[Hotkey/TriggerKeys]` 수정 후 `fcitx5 -r` (또는 `fcitx5-configtool`).
 - 브라우저는 **먼저 열려 있는 Chromium 창을 모두 닫고** 바탕화면의 Chromium 아이콘으로 연다. 이미 떠 있는 Chromium 에 붙으면 예전(ibus) 입력기 환경이라 한글이 안 된다.
 - **로그아웃 후 다시 로그인**(또는 재부팅)하면 세션 전체가 fcitx5 환경이 되어 어떤 방법으로 열어도 한글이 된다.
 - 에디터 키오스크(`start.sh`, `editor_kiosk=on`)는 `bin/kiosk.sh` 가 입력기 환경변수와 데스크탑 세션의 D-Bus 주소를 직접 넣어 준다.
@@ -230,6 +231,7 @@ cd /root/work/github.cgserver/CGServer/bin
 - Chromium 은 GTK3 를 **실행 중에 불러온다**(`ldd` 에는 안 보임). 불러온 모듈은 `/proc/<pid>/maps` 의 `libgtk-3.so`, `im-fcitx5.so` 로 확인.
 - ssh 로 들어온 셸에는 데스크탑의 D-Bus 주소가 없어 `fcitx5-remote`/브라우저의 입력기 연결이 안 된다. 데스크탑 세션의 주소는 `xfce4-session` 프로세스 환경(`/proc/<pid>/environ`)의 `DBUS_SESSION_BUS_ADDRESS`.
 - 이 버전(fcitx5 5.0.5)의 `fcitx5-remote` 에는 `-n` 옵션이 없다. 전환 확인은 `fcitx5-remote -s hangul`/`-s keyboard-us`.
+- 키가 어떤 코드로 들어오는지 확인: 키보드 장치(`/dev/input/event*`)를 읽어 `KEY_HANGEUL`(122)/`KEY_RIGHTALT`(100) 확인. 한/영 키가 있는데도 안 되면 X 키코드 130 이 `Hangul` 인지(`xmodmap -pke | grep 'keycode 130'`) 확인. 옵션 확인: `setxkbmap -query`.
 - 진단: `fcitx5-diagnose`. X 입력 서버 등록 확인: `xprop -root XIM_SERVERS` 가 `@server=fcitx`.
 - 되돌리기: `im-config -n ibus`(또는 `auto`), `~/.config/autostart/fcitx5.desktop` 삭제, 바탕화면 런처는 백업 원본으로 복원.
 

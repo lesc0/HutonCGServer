@@ -179,6 +179,8 @@
   - "GTK 를 안 쓰는 빌드"로 오판할 뻔함: Chromium 은 GTK3 를 실행 중에 불러오므로 `ldd` 에 안 보임. `/proc/<pid>/maps` 에서 `libgtk-3.so`, `im-fcitx5.so` 로 확인.
   - ssh 셸에는 D-Bus 세션 주소가 없어 `fcitx5-remote` 가 실패 -> `xfce4-session` 프로세스 환경에서 가져옴. fcitx5 5.0.5 의 `fcitx5-remote` 에는 `-n` 이 없음.
 - 검증: 새 환경(`GTK_IM_MODULE=fcitx` 등 + 별도 프로필)으로 띄운 에디터/시험 창에서 한글 입력 확인(사용자 확인). XIM 서버 `@server=fcitx`, fcitx5 가 `hangul`/`xim`/`xcb` 애드온 로드.
+- **한/영 키**: 사용하는 Logitech K370s 는 미국식 배열이라 한/영 키가 없음(키 입력을 직접 측정: 한/영 신호 없이 오른쪽 Alt 가 들어옴). fcitx5 전환 키 목록에 이미 `Hangul` 이 있으므로 XKB 옵션 `korean:ralt_hangul,korean:rctrl_hanja`(오른쪽 Alt = 한/영, 오른쪽 Ctrl = 한자)만 연결. 로그인마다 `~/.config/autostart/xkb-hangul.desktop` 로 적용, 지금 세션에도 즉시 적용. 한/영 키가 있는 키보드는 X 키코드 130 이 이미 `Hangul` 이라 그대로 동작.
+- 에디터 글자 편집 입력창 겹침: 편집용 입력창(`.inlineedit`)이 반투명이고 글자색이 개체 글자색이라 뒤의 캔버스 글자가 비쳐 겹쳐 보였음 -> 불투명 배경 + 흰 글자 + 한글 글꼴로 변경.
 - 남은 일: 지금 떠 있는 데스크탑 세션은 ibus 환경이므로 **로그아웃 후 다시 로그인**(또는 재부팅)해야 어떤 방법으로 열어도 한글이 됨. 그 전에는 바탕화면의 Chromium 아이콘(수정한 런처)으로, 열린 Chromium 을 모두 닫은 뒤 열기.
 
 ## 2026-10-01 (이어서 3) — 업스트림 병합, start.sh 기본 production, 패널 배치, stop.sh 보강
