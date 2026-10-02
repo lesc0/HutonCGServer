@@ -1,5 +1,16 @@
 # 작업 히스토리 (cef_mpp / zcgserver)
 
+## 2026-10-02 (이어서 5) — HDMI 2 로컬 화면 "툭툭": 미리보기 62.5Hz 타이머 버그 수정 + 스레드 SCHED_FIFO
+
+- 배경: 송출 영상(TS)의 자막 이동량은 SMOOTH_DT 로 고르게 됐는데도(앞 항목) "별 차이 없다". 사용자가 보는 곳은 **HDMI 2 로컬 화면(output=3 미리보기)**이었음 -> 송출 TS 가 아니라 로컬 표시 경로를 점검.
+- **원인 1 — 미리보기 타이머가 62.5Hz**: `PreviewLoop` 가 `std::chrono::milliseconds(1000 / g_fps)` = 16ms 주기로 그림(60fps 의 정수 ms 내림). 로그의 `[preview-stat] drawn=63/s` 가 증거. 모니터는 60Hz 라 초당 2~3번 프레임이 겹치거나 건너뛰어 규칙적인 "툭툭"으로 보임.
+- **수정 1**: 타이머 대신 **인코더가 새 프레임을 만들 때마다**(`EncodeLoop` 가 `g_pv_seq` 증가 + `condition_variable` 통지) 미리보기가 한 장씩 그림 -> 정확히 초당 60장(`drawn=60/s`). 대기는 50ms 마다 깨어 종료/해상도 변경(창 재생성)을 확인.
+- 진단 추가: `[preview-stat]` 에 `draw_gap_max`(그린 시각 사이 최대 간격 ms). `[stat]` 의 `gap_max/late25/big100`(OnPaint 도착 간격)와 함께 본다.
+- **스레드 SCHED_FIFO** (`src/cg-streamer/rt.h` `SetRealtime`): cg-encode 50, cg-preview 49, cg-audio 48, cg-hdmirx 48, cg-hdmi-aud 48, cg-audio-out 47. 권한이 없으면(RLIMIT_RTPRIO=0) 한 번만 안내하고 일반 스케줄링으로 계속 동작. CEF 렌더러/컴포지터 스레드는 그대로 둠. 실시간 스레드는 모두 대기(sleep/wait) 위주라 기아 위험이 낮고 커널 RT 스로틀(95%)이 안전망.
+- **권한 부여(단말, 1회)**: `sudo sh -c 'echo "pi - rtprio 90" > /etc/security/limits.d/99-cg-rt.conf'` 후 **다시 로그인**해야 적용(`ulimit -r` 이 90 으로 보임). `bin/start.sh` 는 `ulimit -r` 이 0 이면 안내를 출력. setcap 은 CEF 하위 프로세스/라이브러리 경로(AT_SECURE) 때문에 쓰지 않음.
+- 검증(단말): 로그 `[rt] cg-encode: SCHED_FIFO 50` 등 6개, `ps -L` 에서 해당 스레드가 `FF`(FIFO) 우선순위 50/49/48/47 로 표시. 미리보기 `draw_gap_max` 는 보통 18~19ms(이전 타이머 방식은 `drawn=63/s`, 틱 간격 어긋남). 주관적 부드러움은 사용자 확인("지금 잘되는 것 같다").
+- 주의: 확인용 ssh 명령 문자열에 `cg-streamer --run` 같은 패턴을 쓰면 `start.sh` 의 `pgrep -f` 가 그 셸을 스트리머로 오인해 시작을 건너뜀(이번에도 한 번 발생, 로그만 보고 정상으로 착각할 뻔함). 확인할 때는 스크립트 파일로 올려 실행하거나 `ps -eo pid,args | grep "[.]/cg-streamer"` 사용.
+
 ## 2026-10-02 (이어서 4) — 하단 자막(crawl) 끊김 원인 측정과 수정: 프레임 시간을 균일 간격으로
 
 - 증상: 가로 스크롤 하단 자막이 "툭툭" 끊김. 웹 검색(캔버스 서브픽셀/정수 스냅, rAF delta time, CEF OSR 프레임 누락)으로 후보를 정리한 뒤 **단말에서 직접 측정**해 원인 확정.
