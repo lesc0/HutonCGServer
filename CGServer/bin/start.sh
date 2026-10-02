@@ -36,20 +36,8 @@ else
   (cd "$EDITOR_DIR" && ./start.sh --port "$PORT") || echo "  시작 실패 (수동으로 $EDITOR_DIR/start.sh 확인)"
 fi
 
-# 로컬 화면(HDMI) 해상도: 연결된 첫 출력의 첫(권장) 모드로 맞추고, 연결 안 된 출력은 끄고, X 화면 크기도 같게 한다.
-# cg-streamer 의 로컬 미리보기(output=3) 창이 X 화면 크기로 만들어지므로 스트리머를 띄우기 *전에* 해야 한다.
-# (안 하면 X 화면은 1920x1080 인데 모니터는 1024x600 이라 왼쪽 위만 보임)
-if command -v xrandr >/dev/null 2>&1; then
-  out=$(xrandr --query 2>/dev/null | awk '/ connected/{print $1; exit}')
-  if [ -n "$out" ]; then
-    best=$(xrandr --query 2>/dev/null | awk -v o="$out" 'f&&/^[^ ]/{f=0} $1==o{f=1;next} f{print $1;exit}')
-    if [ -n "$best" ]; then
-      xrandr --query 2>/dev/null | awk '/ disconnected/{print $1}' | while read -r o; do xrandr --output "$o" --off 2>/dev/null; done
-      xrandr --output "$out" --mode "$best" 2>/dev/null
-      xrandr --fb "$best" 2>/dev/null
-    fi
-  fi
-fi
+# 로컬 화면(HDMI) 해상도 자동 설정 (display.sh). cg-streamer 의 로컬 미리보기(output=3) 창이 X 화면 크기로 만들어지므로 스트리머를 띄우기 *전에* 한다.
+bash ./display.sh
 
 if [ "${CG_SKIP_STREAMER:-0}" = 1 ]; then echo "[2/3] cg-streamer 건너뜀(CG_SKIP_STREAMER=1)"; else
 echo "[2/3] cg-streamer (project=$PROJECT, 송출 설정은 cgsetup.cfg${CG_UDP:+", udp=$CG_UDP(override)"})"

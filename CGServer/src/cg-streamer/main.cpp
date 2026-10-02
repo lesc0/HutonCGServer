@@ -101,6 +101,8 @@ static bool g_sync = true;                       // UI 지터 버퍼 사용 (--n
 static std::string g_project = "project.json";
 static std::string g_out = "udp://127.0.0.1:1234?pkt_size=1316";
 static std::string g_exe, g_webdir;
+static std::atomic<bool> g_preview_reset{false};          // 로컬 화면 해상도가 바뀌어 미리보기 창을 다시 만들어야 함
+static std::atomic<int> g_preview_w{0}, g_preview_h{0};   // 현재 미리보기 창 크기
 static std::string g_page = "player.html";   // --page=이름.html : 진단/테스트용, bin/web/ 기준 다른 페이지 로드
 
 // cgsetup.cfg: output=1(HDMI만) 2(UDP만, 기본) 3(HDMI+UDP) / udp_ip / udp_port
@@ -632,12 +634,14 @@ static void EncodeLoop(CefRefPtr<Client> client) {
 // - 버퍼가 1장뿐이면 X 서버가 아직 그 메모리를 화면에 옮기는 중에 RGA 가 같은 메모리를 새 프레임으로
 //   덮어써서 화면이 찢어지거나 깨져 보일 수 있다(단일버퍼 티어링) -> 버퍼 2장을 번갈아 쓰고, 각
 //   버퍼는 직전 XShmPutImage 의 ShmCompletion 이벤트(=X 서버가 다 읽음)를 받은 뒤에만 재사용한다.
-static void PreviewLoop() {
-  pthread_setname_np(pthread_self(), "cg-preview");
+// 반환: true = 화면 해상도 변경으로 다시 만들어야 함, false = 종료/실패
+static bool PreviewRun() {
   Display* dpy = XOpenDisplay(nullptr);
-  if (!dpy) { fprintf(stderr, "[preview] XOpenDisplay 실패 (DISPLAY 필요)\n"); return; }
+  if (!dpy) { fprintf(stderr, "[preview] XOpenDisplay 실패 (DISPLAY 필요)\n"); return false; }
   int screen = DefaultScreen(dpy);
   int sw = DisplayWidth(dpy, screen), sh = DisplayHeight(dpy, screen);
+  g_preview_w = sw;
+  g_preview_h = sh;
 
   XSetWindowAttributes attrs{};
   attrs.override_redirect = True;
@@ -683,7 +687,7 @@ static void PreviewLoop() {
   uint64_t drawn = 0, skipped_pending = 0;   // 진단용: X 서버가 못 따라와서 건너뛴 횟수
   auto stat_t0 = clk::now();
   printf("[preview] %dx%d 창 시작 (%s)\n", sw, sh, shm_ok ? "XShm 더블버퍼" : "XPutImage");
-  while (!g_quit) {
+  while (!g_quit && !g_preview_reset) {
     next += period;
 
     if (shm_ok) {
@@ -730,6 +734,37 @@ static void PreviewLoop() {
   XFreeGC(dpy, gc);
   XDestroyWindow(dpy, win);
   XCloseDisplay(dpy);
+  return g_preview_reset && !g_quit;
+}
+
+static void PreviewLoop() {
+  pthread_setname_np(pthread_self(), "cg-preview");
+  do { g_preview_reset = false; } while (PreviewRun());
+}
+
+// 로컬 화면 해상도를 다시 맞춘다(bin/display.sh: 연결된 모니터의 권장 모드 + X 화면 크기). 화면 크기가 바뀌었으면 미리보기 창을 다시 만든다.
+// reload / Switch project / POST /display 에서 호출(모니터를 바꿔 꽂은 뒤 반영). 별도 스레드에서 실행해 HTTP 처리를 막지 않는다.
+static void ApplyDisplay() {
+  std::thread([] {
+    static std::atomic<bool> busy{false};
+    if (busy.exchange(true)) return;
+    const std::string script = std::filesystem::path(g_exe).parent_path().string() + "/display.sh";
+    if (std::filesystem::exists(script)) {
+      const std::string cmd = "bash \"" + script + "\" >/dev/null 2>&1";
+      if (system(cmd.c_str()) != 0) fprintf(stderr, "[display] display.sh 실행 실패\n");
+    }
+    if (g_preview && g_preview_w > 0) {   // 새 연결로 현재 X 화면 크기를 읽어 창 크기와 비교
+      if (Display* d = XOpenDisplay(nullptr)) {
+        const int w = DisplayWidth(d, DefaultScreen(d)), h = DisplayHeight(d, DefaultScreen(d));
+        XCloseDisplay(d);
+        if (w != g_preview_w || h != g_preview_h) {
+          printf("[display] 화면 크기 변경 %dx%d -> %dx%d: 미리보기 창 다시 만듦\n", (int)g_preview_w, (int)g_preview_h, w, h);
+          g_preview_reset = true;
+        }
+      }
+    }
+    busy = false;
+  }).detach();
 }
 
 static void UdpLoop(CefRefPtr<Client> client) {
@@ -881,10 +916,15 @@ static void HttpHandle(int fd, CefRefPtr<Client> client) {
     const auto np = std::filesystem::path(g_project).parent_path() / (body + ".json");
     if (!std::filesystem::exists(np)) return HttpReply(fd, 404, "{\"ok\":false,\"error\":\"project not found\"}");
     g_project = np.string();
+    ApplyDisplay();   // 모니터를 바꿔 꽂았을 수 있으니 해상도도 다시 맞춤
     CefPostTask(TID_UI, base::BindOnce(&Client::Exec, client, std::string("cg.cmd(\"reload\",\"\",\"\")")));
+    return HttpReply(fd, 200, "{\"ok\":true}");
+  } else if (seg.size() == 1 && name == "display") {   // 로컬 화면 해상도만 다시 맞춤
+    ApplyDisplay();
     return HttpReply(fd, 200, "{\"ok\":true}");
   } else if (seg.size() == 1 && (name == "play" || name == "run" || name == "stop" || name == "clear" || name == "pause" ||
                                  name == "cut" || name == "skip" || name == "next" || name == "prev" || name == "reload")) {
+    if (name == "reload") ApplyDisplay();   // Reload saved project 때도 해상도 다시 맞춤
     ok = true;
   } else if (seg.size() == 2 && (name == "play" || name == "goto") && AllDigits(seg[1])) {
     arg = seg[1]; ok = true;

@@ -5,6 +5,7 @@ bin/*
 !bin/start.sh
 !bin/stop.sh
 !bin/rebuild.sh
+!bin/display.sh
 !bin/cgsetup.cfg
 !bin/media/
 bin/media/*
