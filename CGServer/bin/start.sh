@@ -28,7 +28,7 @@ PORT=${CG_EDITOR_PORT:-${CFG_PORT:-$(set -a; . ../src/cg-editor/.env 2>/dev/null
 export DISPLAY=${DISPLAY:-:0}
 EDITOR_DIR=../src/cg-editor
 CHROMIUM=/opt/chromium.org/stable/chromium-browser
-KIOSK_PROFILE=/tmp/cg-editor-kiosk
+KIOSK_PROFILE=/tmp/cg-editor-kiosk-$(id -un)   # 사용자별 폴더(root 로 만든 폴더가 남아 있으면 다른 계정이 못 써서 Chromium 이 안 뜸)
 CHROMIUM_PIDF=.run/kiosk-chromium.pid
 
 echo "[1/3] cg-editor"
