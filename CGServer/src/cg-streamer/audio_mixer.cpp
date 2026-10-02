@@ -24,8 +24,8 @@ void AudioMixer::Start(TsMuxer* mux) {
   std::fill(ring_.begin(), ring_.end(), 0.f);
   running_ = true;
   th_ = std::thread(&AudioMixer::Run, this);
-  if (!local_dev_.empty()) {
-    { std::lock_guard<std::mutex> lk(lmu_); lq_.clear(); }
+  if (local_on_) {
+    { std::lock_guard<std::mutex> lk(lmu_); lq_.clear(); local_reopen_ = false; }
     lth_ = std::thread(&AudioMixer::LocalRun, this);
   }
 }
@@ -105,7 +105,7 @@ void AudioMixer::Run() {
       pos_ += kBlock;
     }
     mux_->WriteAudio(blk.data(), start);
-    if (!local_dev_.empty()) {
+    if (local_on_ && !LocalDev().empty()) {
       std::vector<int16_t> s(kBlock * 2);
       for (int i = 0; i < kBlock * 2; i++) s[i] = (int16_t)std::lrintf(std::clamp(blk[i], -1.f, 1.f) * 32767.f);
       {
@@ -120,6 +120,15 @@ void AudioMixer::Run() {
 }
 
 // 로컬 재생: libasound.so.2 를 dlopen (캡처와 같은 방식). 장치가 없거나 에러면 닫고 재시도한다.
+void AudioMixer::ChangeLocalOut(const std::string& dev) {
+  std::lock_guard<std::mutex> lk(lmu_);
+  if (!local_on_ || dev == local_dev_) return;
+  local_dev_ = dev;
+  local_reopen_ = true;
+  lq_.clear();
+  lcv_.notify_all();
+}
+
 void AudioMixer::LocalRun() {
   pthread_setname_np(pthread_self(), "cg-audio-out");
   SetRealtime("cg-audio-out", 47);
@@ -147,15 +156,28 @@ void AudioMixer::LocalRun() {
   void* h = nullptr;
   bool warned = false;
   while (!stop_) {
-    if (!h) {   // 모니터가 아직 안 붙었거나 장치가 준비 안 되면 재시도
-      if (a.open(&h, local_dev_.c_str(), 0, 0) < 0 || a.set_params(h, 2, 3, 2, kRate, 1, 150000) < 0) {
+    {   // 장치가 바뀌었으면 닫고 새 장치로 다시 연다
+      std::lock_guard<std::mutex> lk(lmu_);
+      if (local_reopen_) {
+        local_reopen_ = false;
         if (h) { a.close(h); h = nullptr; }
-        if (!warned) { fprintf(stderr, "[audio] 로컬 출력 열기 실패 (%s) - 재시도\n", local_dev_.c_str()); warned = true; }
+        warned = false;
+      }
+    }
+    const std::string dev = LocalDev();
+    if (dev.empty()) {   // 소리를 내보낼 HDMI 가 아직 없음(모니터 분리 등): 기다림
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      continue;
+    }
+    if (!h) {   // 모니터가 아직 안 붙었거나 장치가 준비 안 되면 재시도
+      if (a.open(&h, dev.c_str(), 0, 0) < 0 || a.set_params(h, 2, 3, 2, kRate, 1, 150000) < 0) {
+        if (h) { a.close(h); h = nullptr; }
+        if (!warned) { fprintf(stderr, "[audio] 로컬 출력 열기 실패 (%s) - 재시도\n", dev.c_str()); warned = true; }
         for (int i = 0; i < 10 && !stop_; i++) std::this_thread::sleep_for(std::chrono::milliseconds(100));
         continue;
       }
       warned = false;
-      printf("[audio] 로컬 출력 시작: %s\n", local_dev_.c_str());
+      printf("[audio] 로컬 출력 시작: %s\n", dev.c_str());
       const std::vector<int16_t> silence(kBlock * 2, 0);   // 시작 직후 언더런 방지용 선행 무음 2블록
       for (int i = 0; i < 2; i++) a.writei(h, silence.data(), kBlock);
     }

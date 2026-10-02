@@ -29,7 +29,9 @@ class AudioMixer {
   void Clear();   // 아직 재생되지 않은 음성 폐기 (영상 정지/교체 시)
 
   // 로컬 재생: 송출(AAC)과 같은 믹스를 이 ALSA 장치로도 내보낸다(예: "plughw:CARD=rockchiphdmi1,DEV=0"). 비면 안 함. Start() 전에 지정.
-  void SetLocalOut(const std::string& dev) { local_dev_ = dev; }
+  void SetLocalOut(const std::string& dev) { local_on_ = true; local_dev_ = dev; }
+  // 실행 중에 로컬 출력 장치를 바꾼다(모니터를 뽑고 꽂아 소리가 나갈 HDMI 가 달라졌을 때). 빈 문자열이면 재생하지 않고 기다린다.
+  void ChangeLocalOut(const std::string& dev);
 
  private:
   void Run();
@@ -47,6 +49,9 @@ class AudioMixer {
   int64_t pos_ = 0;        // 다음에 인코딩할 샘플 위치
   int64_t live_pos_ = -1;
 
+  std::string LocalDev() { std::lock_guard<std::mutex> lk(lmu_); return local_dev_; }
+  bool local_on_ = false;     // 로컬 재생 사용(장치가 아직 없어도 스레드는 돌며 기다림)
+  bool local_reopen_ = false; // ChangeLocalOut 이 장치를 바꿨으니 다시 열라는 표시(lmu_ 로 보호)
   std::string local_dev_;
   std::thread lth_;
   std::mutex lmu_;

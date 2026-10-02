@@ -793,6 +793,22 @@ static void PreviewLoop() {
   do { g_preview_reset = false; } while (PreviewRun());
 }
 
+// 로컬 음성을 내보낼 ALSA 장치: 송출 모니터(output_display, 기본 HDMI-2)가 연결되어 있으면 그 쪽 소리 카드, 아니면 연결된 첫 HDMI(모니터가 한 대일 때),
+// 하나도 없으면 빈 문자열. HDMI-A-1=rockchiphdmi0, HDMI-A-2=rockchiphdmi1.
+static std::string PickAudioDev() {
+  auto connected = [](int i) {
+    std::ifstream st("/sys/class/drm/card0-HDMI-A-" + std::to_string(i) + "/status");
+    std::string s;
+    return (st >> s) && s == "connected";
+  };
+  int want = 0;
+  if (g_output_display.size() >= 6 && g_output_display.compare(0, 5, "HDMI-") == 0) want = atoi(g_output_display.c_str() + 5);
+  int pick = (want >= 1 && want <= 2 && connected(want)) ? want : 0;
+  for (int i = 1; i <= 2 && !pick; i++)
+    if (connected(i)) pick = i;
+  return pick ? "plughw:CARD=rockchiphdmi" + std::to_string(pick - 1) + ",DEV=0" : std::string();
+}
+
 // 로컬 화면 해상도를 다시 맞춘다(bin/display.sh: 연결된 모니터의 권장 모드 + X 화면 크기). 화면 크기가 바뀌었으면 미리보기 창을 다시 만든다.
 // reload / Switch project / POST /display 에서 호출(모니터를 바꿔 꽂은 뒤 반영). 별도 스레드에서 실행해 HTTP 처리를 막지 않는다.
 static void ApplyDisplay() {
@@ -804,6 +820,7 @@ static void ApplyDisplay() {
       const std::string cmd = "bash \"" + script + "\" >/dev/null 2>&1";
       if (system(cmd.c_str()) != 0) fprintf(stderr, "[display] display.sh 실행 실패\n");
     }
+    if (g_output_type == 3 && (g_audio_out == "auto" || g_audio_out.empty())) g_audio.ChangeLocalOut(PickAudioDev());   // 소리가 나갈 HDMI 가 바뀌었을 수 있음
     if (g_preview && g_preview_w > 0) {   // 새 연결로 현재 X 화면 크기를 읽어 창 크기와 비교
       if (Display* d = XOpenDisplay(nullptr)) {
         int w = DisplayWidth(d, DefaultScreen(d)), h = DisplayHeight(d, DefaultScreen(d)), x = 0, y = 0;
@@ -818,6 +835,39 @@ static void ApplyDisplay() {
     }
     busy = false;
   }).detach();
+}
+
+// 모니터를 뽑거나 꽂으면(HDMI 커넥터 상태 변화) 배치를 자동으로 다시 계산한다. X 가 연결 변화 때 출력을 모두 0,0 에 겹쳐 놓고 화면을 줄이므로
+// (그러면 송출 창이 반쪽만 보임) 1.5초 동안 상태가 안정되면 display.sh 를 다시 돌리고 미리보기 창/음성/키오스크를 맞춘다.
+static void DisplayWatch() {
+  pthread_setname_np(pthread_self(), "cg-dispwatch");
+  auto sig = [] {
+    std::string s;
+    for (const char* n : {"HDMI-A-1", "HDMI-A-2"}) {
+      std::ifstream f(std::string("/sys/class/drm/card0-") + n + "/status");
+      std::string v;
+      f >> v;
+      s += v + ";";
+    }
+    return s;
+  };
+  std::string last = sig(), pending;
+  int stable = 0;
+  while (!g_quit) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    const std::string cur = sig();
+    if (cur == last) { pending.clear(); stable = 0; continue; }
+    if (cur == pending) stable++;
+    else { pending = cur; stable = 1; }
+    if (stable >= 3) {
+      last = cur;
+      stable = 0;
+      pending.clear();
+      printf("[display] 모니터 연결 변경 감지(%s): 배치를 다시 계산합니다
+", cur.c_str());
+      ApplyDisplay();
+    }
+  }
 }
 
 static void UdpLoop(CefRefPtr<Client> client) {
@@ -1083,23 +1133,8 @@ int main(int argc, char* argv[]) {
   if (g_output_type == 1) { g_view = true; g_encode = false; }  // HDMI 직결만: 로컬 전체화면, 인코딩/UDP 없음
   else if (g_output_type == 3) g_preview = true;                // HDMI+UDP 동시: 인코딩 결과를 로컬 창에도 표시
   if (g_output_type == 3 && g_audio_out != "off") {   // HDMI+UDP 동시: 송출과 같은 음성을 로컬 HDMI 로도 재생
-    std::string dev = g_audio_out;
-    if (dev == "auto" || dev.empty()) {   // 연결된 HDMI 커넥터 -> 소리 카드 (HDMI-A-1=rockchiphdmi0, HDMI-A-2=rockchiphdmi1)
-      dev.clear();
-      // 송출 모니터(output_display, 기본 HDMI-2)가 연결되어 있으면 그 쪽 소리 카드를 우선하고, 아니면 연결된 첫 HDMI(모니터가 한 대일 때)
-      auto connected = [](int i) {
-        std::ifstream st("/sys/class/drm/card0-HDMI-A-" + std::to_string(i) + "/status");
-        std::string s;
-        return (st >> s) && s == "connected";
-      };
-      int want = 0;
-      if (g_output_display.size() >= 6 && g_output_display.compare(0, 5, "HDMI-") == 0) want = atoi(g_output_display.c_str() + 5);
-      int pick = (want >= 1 && want <= 2 && connected(want)) ? want : 0;
-      for (int i = 1; i <= 2 && !pick; i++)
-        if (connected(i)) pick = i;
-      if (pick) dev = "plughw:CARD=rockchiphdmi" + std::to_string(pick - 1) + ",DEV=0";   // HDMI-A-1=rockchiphdmi0, HDMI-A-2=rockchiphdmi1
-    }
-    if (!dev.empty()) g_audio.SetLocalOut(dev);
+    // 장치가 아직 없어도(빈 문자열) 로컬 재생은 켜 두고, 모니터가 연결되면 ChangeLocalOut 으로 바뀐다
+    g_audio.SetLocalOut(g_audio_out == "auto" || g_audio_out.empty() ? PickAudioDev() : g_audio_out);
   }
 
   int seconds = 0;
@@ -1156,7 +1191,7 @@ int main(int argc, char* argv[]) {
   CefRefPtr<Client> client = new Client(osr);
   g_router->AddHandler(client.get(), false);
 
-  std::thread enc_thread, udp_thread, http_thread, watcher, preview_thread;
+  std::thread enc_thread, udp_thread, http_thread, watcher, preview_thread, display_thread;
 
   if (g_app_mode == AppMode::kRun) {
     // ===== [RUN MODE] paint=kSoftware(기본) 또는 kAccel(--accel, 실험) =====
@@ -1191,6 +1226,7 @@ int main(int argc, char* argv[]) {
 
     if (g_encode) enc_thread = std::thread(EncodeLoop, client);
     if (g_preview) preview_thread = std::thread(PreviewLoop);
+    if (g_preview || g_output_type == 1) display_thread = std::thread(DisplayWatch);
     udp_thread = std::thread(UdpLoop, client);
     http_thread = std::thread(HttpLoop, client);
     watcher = std::thread([&] {
@@ -1242,6 +1278,7 @@ int main(int argc, char* argv[]) {
   if (http_thread.joinable()) http_thread.join();
   if (enc_thread.joinable()) enc_thread.join();
   if (preview_thread.joinable()) preview_thread.join();
+  if (display_thread.joinable()) display_thread.join();
   g_video.Stop();
   g_hdmi.Stop();
   g_encoder.Deinit();

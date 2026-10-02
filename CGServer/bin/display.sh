@@ -23,6 +23,7 @@ modeof() { echo "$CONN" | awk -v o="$1" '$1==o{print $2;exit}'; }   # 출력 이
 # 연결 안 된 출력은 끈다
 xrandr --query 2>/dev/null | awk '/ disconnected/{print $1}' | while read -r o; do xrandr --output "$o" --off 2>/dev/null; done
 
+OLD_EDITOR_GEOM=$(cat "$RUN/display-editor.geom" 2>/dev/null)
 ME=$(modeof "$EDITOR_OUT"); MO=$(modeof "$OUTPUT_OUT")
 if [ -n "$ME" ] && [ -n "$MO" ] && [ "$EDITOR_OUT" != "$OUTPUT_OUT" ]; then
   # ---- 모니터 두 대: 에디터(왼쪽) + 송출(오른쪽) ----
@@ -42,5 +43,10 @@ else
   xrandr --fb "${W}x${H}" 2>/dev/null
   echo "0 0 $W $H" > "$RUN/display-editor.geom"
   echo "0 0 $W $H" > "$RUN/display-output.geom"
+fi
+# 에디터 모니터의 위치/크기가 바뀌었고 키오스크가 떠 있으면 새 위치로 다시 띄운다(모니터를 뽑았다 꽂은 경우). 처음 시작할 때는 start.sh 가 띄우므로 건드리지 않음.
+NEW_EDITOR_GEOM=$(cat "$RUN/display-editor.geom" 2>/dev/null)
+if [ -n "$OLD_EDITOR_GEOM" ] && [ "$OLD_EDITOR_GEOM" != "$NEW_EDITOR_GEOM" ] && [ -f "$RUN/kiosk-chromium.pid" ] && kill -0 "$(cat "$RUN/kiosk-chromium.pid")" 2>/dev/null; then
+  ( setsid bash "$HERE/kiosk.sh" restart >/dev/null 2>&1 & )
 fi
 exit 0
