@@ -40,6 +40,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <deque>
 #include <chrono>
 #include <cstdio>
@@ -101,6 +102,10 @@ static bool g_sync = true;                       // UI 지터 버퍼 사용 (--n
 static std::string g_project = "project.json";
 static std::string g_out = "udp://127.0.0.1:1234?pkt_size=1316";
 static std::string g_exe, g_webdir;
+// 인코더가 새 프레임을 만들 때마다 증가시켜 미리보기를 깨운다(타이머로 그리면 16ms=62.5Hz 처럼 모니터 60Hz 와 어긋나 초당 2~3번 프레임이 튄다)
+static std::mutex g_pv_mu;
+static std::condition_variable g_pv_cv;
+static uint64_t g_pv_seq = 0;
 static std::atomic<bool> g_preview_reset{false};          // 로컬 화면 해상도가 바뀌어 미리보기 창을 다시 만들어야 함
 static std::atomic<int> g_preview_w{0}, g_preview_h{0};   // 현재 미리보기 창 크기
 static std::string g_page = "player.html";   // --page=이름.html : 진단/테스트용, bin/web/ 기준 다른 페이지 로드
@@ -612,6 +617,8 @@ static void EncodeLoop(CefRefPtr<Client> client) {
     if (!g_encoder.Encode([&](const uint8_t* d, size_t n) { mux.Write(d, n); bytes += n; }))
       continue;                     // 아직 프레임 없음
     frames++;
+    { std::lock_guard<std::mutex> lk(g_pv_mu); g_pv_seq++; }
+    g_pv_cv.notify_one();
 
     if (frames % g_fps == 0) {
       double sec = std::chrono::duration<double>(clk::now() - t0).count();
@@ -696,14 +703,20 @@ static bool PreviewRun() {
   }
 
   using clk = std::chrono::steady_clock;
-  const auto period = std::chrono::milliseconds(1000 / g_fps);   // 원본과 동일한 60fps
-  auto next = clk::now();
+  uint64_t seen = 0;   // 마지막으로 그린 인코더 프레임 번호
   int cur = 0;
   uint64_t drawn = 0, skipped_pending = 0;   // 진단용: X 서버가 못 따라와서 건너뛴 횟수
+  auto last_draw = clk::time_point{};
+  double draw_gap_max_ms = 0;                 // 진단용: 그린 시각 사이 최대 간격(ms)
   auto stat_t0 = clk::now();
   printf("[preview] %dx%d 창 시작 (%s)\n", sw, sh, shm_ok ? "XShm 더블버퍼" : "XPutImage");
   while (!g_quit && !g_preview_reset) {
-    next += period;
+    {   // 인코더가 새 프레임을 만들 때까지 대기(종료/재생성 확인용으로 50ms 마다 깨어남)
+      std::unique_lock<std::mutex> lk(g_pv_mu);
+      g_pv_cv.wait_for(lk, std::chrono::milliseconds(50), [&] { return g_pv_seq != seen || g_quit || g_preview_reset; });
+      if (g_pv_seq == seen) continue;
+      seen = g_pv_seq;
+    }
 
     if (shm_ok) {
       // 이 버퍼가 아직 화면에 표시 중이면(ShmCompletion 미수신) 이번 틱은 건너뛴다(찢어짐 방지).
@@ -722,6 +735,12 @@ static bool PreviewRun() {
         XFlush(dpy);
         cur ^= 1;
         drawn++;
+        {
+          const auto nw = clk::now();
+          if (last_draw != clk::time_point{})
+            draw_gap_max_ms = std::max(draw_gap_max_ms, std::chrono::duration<double, std::milli>(nw - last_draw).count());
+          last_draw = nw;
+        }
       }
     } else if (g_enc_ok && g_encoder.ExportPreviewBgrx(fallback_buf.data(), sw, sh)) {
       XImage* tmp = XCreateImage(dpy, visual, depth, ZPixmap, 0, (char*)fallback_buf.data(), sw, sh, 32, 0);
@@ -734,11 +753,10 @@ static bool PreviewRun() {
       }
     }
     if (clk::now() - stat_t0 >= std::chrono::seconds(1)) {
-      printf("[preview-stat] drawn=%llu/s skipped(X못따라옴)=%llu/s\n",
-             (unsigned long long)drawn, (unsigned long long)skipped_pending);
-      drawn = 0; skipped_pending = 0; stat_t0 = clk::now();
+      printf("[preview-stat] drawn=%llu/s skipped(X못따라옴)=%llu/s draw_gap_max=%.0fms\n",
+             (unsigned long long)drawn, (unsigned long long)skipped_pending, draw_gap_max_ms);
+      drawn = 0; skipped_pending = 0; draw_gap_max_ms = 0; stat_t0 = clk::now();
     }
-    std::this_thread::sleep_until(next);
   }
   for (auto& b : bufs) {
     if (!b.img) continue;
