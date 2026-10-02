@@ -181,3 +181,6 @@ input:disabled,textarea:disabled{background:#0a0d15;color:#55617c}
 
 /* Attributes 오른쪽: F / E-1 / E-2 / E-3 / S 버튼을 한 줄로 (줄바꿈 금지, 버튼 5개를 같은 너비로 칸 끝까지 채움, 간격 2px) */
 .facebuttons{flex-wrap:nowrap;gap:2px}.facebuttons button{flex:1 1 0;min-width:0;padding:2px 1px;font-size:11px;text-align:center;white-space:nowrap}.faceproperties{min-width:140px}
+
+/* 컨텍스트 메뉴 항목: 아이콘 + 글자 */
+.contextmenu button{display:flex;align-items:center;gap:8px}.contextmenu button svg{flex:none;opacity:.85}
