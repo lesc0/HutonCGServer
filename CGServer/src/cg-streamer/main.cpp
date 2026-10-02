@@ -698,16 +698,40 @@ static int PreviewRun() {
   g_preview_w = sw;
   g_preview_h = sh;
 
+  // 창 종류: 기본은 창 관리자(xfwm4)가 관리하는 정식 창(제목 표시줄 있음). override_redirect 창은 이 단말에서 다른 프로그램의 마우스 클릭이 안 먹는 문제가
+  // 있어서(정식 창으로 바꾸니 해결) 쓰지 않는다. CG_PV_STYLE=override 로 예전 방식을 시험할 수 있다.
+  const char* pv_style = getenv("CG_PV_STYLE");
+  const bool pv_override = pv_style && !strcmp(pv_style, "override");
   XSetWindowAttributes attrs{};
-  attrs.override_redirect = True;
+  attrs.override_redirect = pv_override ? True : False;
   attrs.background_pixel = BlackPixel(dpy, screen);
   Window win = XCreateWindow(dpy, RootWindow(dpy, screen), gx, gy, sw, sh, 0,
                               CopyFromParent, InputOutput, CopyFromParent,
                               CWOverrideRedirect | CWBackPixel, &attrs);
+  if (!pv_override) {
+    XStoreName(dpy, win, "cg-preview");
+    XSizeHints sz{};
+    sz.flags = USPosition | USSize | PPosition | PSize;   // 위치/크기를 창 관리자에 요청(송출 모니터 영역)
+    sz.x = gx; sz.y = gy; sz.width = sw; sz.height = sh;
+    XSetWMNormalHints(dpy, win, &sz);
+    XMapWindow(dpy, win);
+    XSync(dpy, False);
+    XWindowAttributes wa{};   // 창 관리자가 제목 표시줄만큼 줄였을 수 있으니 자리가 잡힐 때까지 기다린 뒤 실제 크기를 쓴다
+    int lw = -1, lh = -1;
+    for (int i = 0; i < 20; i++) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      XGetWindowAttributes(dpy, win, &wa);
+      if (i >= 2 && wa.width == lw && wa.height == lh) break;
+      lw = wa.width; lh = wa.height;
+    }
+    if (wa.width > 0 && wa.height > 0) { sw = wa.width; sh = wa.height; }
+  }
   // 시험용 스위치(원인 분리): CG_PV_NOINPUT=1 창이 입력을 받지 않게(클릭이 아래 창으로 통과), CG_PV_LOWER=1 맨 위가 아니라 맨 아래로 둠
   if (getenv("CG_PV_NOINPUT")) XShapeCombineRectangles(dpy, win, ShapeInput, 0, 0, nullptr, 0, ShapeSet, 0);
-  if (getenv("CG_PV_LOWER")) { XMapWindow(dpy, win); XLowerWindow(dpy, win); }
-  else XMapRaised(dpy, win);
+  if (pv_override) {
+    if (getenv("CG_PV_LOWER")) { XMapWindow(dpy, win); XLowerWindow(dpy, win); }
+    else XMapRaised(dpy, win);
+  }
   if (PvStage() == 2) { XFlush(dpy); return PvIdle(); }
   if (PvStage() == 4) {   // 진단: 창을 만든 뒤 X 연결을 닫아도 창은 남게(RetainPermanent) -> 열린 연결이 문제인지 확인
     XSync(dpy, False);
