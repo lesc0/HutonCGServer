@@ -30,7 +30,7 @@ MONS=$(mons)
 geom_of() { echo "$MONS" | awk -v o="$1" '$1==o{print $2,$3,$4,$5;exit}'; }
 connected() { xrandr --query 2>/dev/null | awk -v o="$1" '$1==o && $2=="connected"{f=1} END{exit !f}'; }
 # 권장 모드: 모드 줄에서 '+' 표시가 붙은 것(예: 60.00*+). 없으면 첫 번째 모드. (첫 줄이 권장이 아닌 모니터가 있음: 4:3 모니터 등)
-pref_mode() { xrandr --query 2>/dev/null | awk -v o="$1" '$1==o{f=1;next} f&&/^[[:space:]]+[0-9]+x[0-9]+/{m=$1;sub(/[^0-9x].*$/,"",m); if(first=="")first=m; if($0 ~ /+/){print m; done=1; exit} next} f&&/^[^[:space:]]/{exit} END{if(!done&&first!="")print first}'; }
+pref_mode() { xrandr --query 2>/dev/null | awk -v o="$1" '$1==o{f=1;next} f&&/^[[:space:]]+[0-9]+x[0-9]+/{m=$1;sub(/[^0-9x].*$/,"",m); if(first=="")first=m; if($0 ~ /[+]/){print m; done=1; exit} next} f&&/^[^[:space:]]/{exit} END{if(!done&&first!="")print first}'; }
 
 if connected "$OUTPUT_OUT"; then
   OG=$(geom_of "$OUTPUT_OUT")
