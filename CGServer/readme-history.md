@@ -1,5 +1,14 @@
 # 작업 히스토리 (cef_mpp / zcgserver)
 
+## 2026-10-02 (이어서 2) — 해상도 재설정 명령 (Reload / Switch project 에 포함)
+
+- 배경: 해상도 자동 설정이 `start.sh` 실행 시점에만 돼서, 스트리머를 켜 둔 채 모니터를 바꿔 꽂으면(`xrandr --fb` 로 고정된 X 화면 + 시작 시 한 번 만든 미리보기 창) 반영이 안 됨.
+- `bin/display.sh` 신설: 연결된 첫 출력의 권장 모드 적용 + 연결 안 된 출력 `--off` + X 화면 크기(`--fb`)를 같게(커지는 경우/작아지는 경우 모두 되도록 fb→모드→fb 순서로 시도). `start.sh` 가 스트리머 시작 전에 `bash ./display.sh` 로 호출(기존 인라인 코드를 이 스크립트로 이동). `.gitignore` 에 `!bin/display.sh`.
+- cg-streamer(`ApplyDisplay`): 별도 스레드에서 `display.sh` 를 실행한 뒤 현재 X 화면 크기를 읽어 **미리보기 창 크기와 다르면** `PreviewLoop` 를 다시 돌려 창/버퍼를 새 크기로 재생성(`PreviewRun` 이 true 를 반환). 같은 크기면 아무것도 안 해서 화면 깜박임 없음. 송출(인코딩/UDP)은 끊기지 않음.
+- 호출 시점: **Reload saved project**(`POST /reload`), **Switch project**(`POST /switch`) 때 자동 + 단독 명령 `POST /display`(에디터 `/ctl/display` 중계로도 가능). 에디터 UI 는 변경 없음(기존 두 버튼이 같은 엔드포인트를 씀).
+- 검증(단말): 해상도를 일부러 1280x720 으로 바꿔 둔 뒤 `POST /display`·`/reload` → 1024x600(연결된 모니터 권장)으로 복귀. 화면 크기가 달라지는 경우 `[display] 화면 크기 변경 1280x720 -> 1024x600: 미리보기 창 다시 만듦` 로그와 함께 창이 새 크기로 재생성됨.
+- 한계: 모니터를 바꿔 꽂은 뒤 **Reload/Switch project(또는 /display)를 눌러야** 반영됨(핫플러그 자동 감지는 아님). Chromium 키오스크 창 크기는 이 경로로 갱신하지 않음.
+
 ## 2026-10-02 (이어서) — 로컬 HDMI 화면 해상도 맞춤 + 로컬 HDMI 로도 음성 재생
 
 ### 로컬 화면(HDMI 2) 해상도가 안 맞던 문제 (`bin/start.sh`)
