@@ -3,8 +3,8 @@
 ## 2026-10-02 (이어서 8) — Effects 시간 항목 이름 변경 (Duration/Length/Begin)
 
 - 혼란: `Duration`(효과가 진행되는 시간)과 `Length`(개체가 화면에 떠 있는 전체 시간)가 둘 다 "시간 길이"로 읽혀 구분이 안 됨, `Begin` 도 무엇의 시작인지 불분명.
-- 변경(`attributes.tsx` 라벨만, 저장 필드명 `inDuration/outDuration/start/duration` 은 그대로라 기존 프로젝트 호환): **Duration → In Time / Out Time**(위의 In/Out 선택에 따라 바뀜), **Length → Show Time**, **Begin → Start Time**. Speed 유지. 각 항목에 마우스를 올리면 설명(title) 표시, 도움말에도 설명 추가.
-- Crawl/Roll 은 In/Out 시간을 쓰지 않으므로(진행이 Show Time 전체에 걸쳐 0→100%) 해당 효과를 선택하면 In Time/Out Time 입력을 비활성화하고 툴팁에 안내.
+- 변경(`attributes.tsx` 라벨만, 저장 필드명 `inDuration/outDuration/start/duration` 은 그대로라 기존 프로젝트 호환): **Duration → In Duration / Out Duration**(위의 In/Out 선택에 따라 바뀜; 처음엔 In Time/Out Time 으로 했다가 요청으로 Duration 유지), **Length → Show Time**, **Begin → Start Time**. Speed 유지. 각 항목에 마우스를 올리면 설명(title) 표시, 도움말에도 설명 추가.
+- Crawl/Roll 은 In/Out 시간을 쓰지 않으므로(진행이 Show Time 전체에 걸쳐 0→100%) 해당 효과를 선택하면 In/Out Duration 입력을 비활성화하고 툴팁에 안내.
 
 ## 2026-10-02 (이어서 7) — Effects 번호(001~)가 뭐가 다른지 표시
 
