@@ -75,7 +75,6 @@
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
 #include <X11/extensions/XShm.h>
-#include <X11/extensions/shape.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #undef Success
@@ -674,13 +673,6 @@ static bool ReadOutputGeom(int& x, int& y, int& w, int& h) {
 }
 
 // 반환: true = 화면 해상도 변경으로 다시 만들어야 함, false = 종료/실패
-// 시험용(원인 분리): CG_PV_STAGE=1 X 연결까지만, 2 창을 띄우기까지만, 3 공유 메모리 준비까지만 하고 대기. 기본(없음)은 전부 실행.
-static int PvStage() { const char* s = getenv("CG_PV_STAGE"); return s ? atoi(s) : 99; }
-static int PvIdle() {
-  while (!g_quit && !g_preview_reset) std::this_thread::sleep_for(std::chrono::milliseconds(200));
-  return (g_preview_reset && !g_quit) ? 1 : 0;
-}
-
 // 반환: 0 = 종료/실패, 1 = 송출 모니터 영역이 바뀌어 다시 만들어야 함, 2 = 송출 모니터가 없어 창을 띄우지 않음(모니터가 생길 때까지 기다림)
 static int PreviewRun() {
   Display* dpy = XOpenDisplay(nullptr);
@@ -693,17 +685,16 @@ static int PreviewRun() {
     XCloseDisplay(dpy);
     return 2;
   }
-  if (PvStage() == 1) { XCloseDisplay(dpy); return PvIdle(); }
   g_preview_x = gx;
   g_preview_y = gy;
   g_preview_w = sw;
   g_preview_h = sh;
 
   // 창 종류: 기본은 창 관리자(xfwm4)가 관리하는 정식 창(제목 표시줄 있음). override_redirect 창은 이 단말에서 다른 프로그램의 마우스 클릭이 안 먹는 문제가
-  // 있어서(정식 창으로 바꾸니 해결) 쓰지 않는다. CG_PV_STYLE=override 로 예전 방식을 시험할 수 있다.
+  // 있어서(정식 창으로 바꾸니 해결) 쓰지 않는다. CG_PV_STYLE=override(예전 방식)/title(제목 표시줄 있음)/그 외(기본, 제목 표시줄 없는 정식 창).
   const char* pv_style = getenv("CG_PV_STYLE");
   const bool pv_override = pv_style && !strcmp(pv_style, "override");
-  const bool pv_borderless = pv_style && !strcmp(pv_style, "borderless");   // 창 관리자가 관리하되 제목 표시줄/테두리 없음
+  const bool pv_borderless = !pv_override && !(pv_style && !strcmp(pv_style, "title"));   // 기본: 창 관리자가 관리하되 제목 표시줄/테두리 없음 (CG_PV_STYLE=title 이면 제목 표시줄 있음)
   XSetWindowAttributes attrs{};
   attrs.override_redirect = pv_override ? True : False;
   attrs.background_pixel = BlackPixel(dpy, screen);
@@ -736,21 +727,7 @@ static int PreviewRun() {
     }
     if (wa.width > 0 && wa.height > 0) { sw = wa.width; sh = wa.height; }
   }
-  // 시험용 스위치(원인 분리): CG_PV_NOINPUT=1 창이 입력을 받지 않게(클릭이 아래 창으로 통과), CG_PV_LOWER=1 맨 위가 아니라 맨 아래로 둠
-  if (getenv("CG_PV_NOINPUT")) XShapeCombineRectangles(dpy, win, ShapeInput, 0, 0, nullptr, 0, ShapeSet, 0);
-  if (pv_override) {
-    if (getenv("CG_PV_LOWER")) { XMapWindow(dpy, win); XLowerWindow(dpy, win); }
-    else XMapRaised(dpy, win);
-  }
-  if (PvStage() == 2) { XFlush(dpy); return PvIdle(); }
-  if (PvStage() == 4) {   // 진단: 창을 만든 뒤 X 연결을 닫아도 창은 남게(RetainPermanent) -> 열린 연결이 문제인지 확인
-    XSync(dpy, False);
-    printf("[preview] stage4 window=0x%lx\n", (unsigned long)win);
-    fflush(stdout);
-    XSetCloseDownMode(dpy, RetainPermanent);
-    XCloseDisplay(dpy);
-    return PvIdle();
-  }
+  if (pv_override) XMapRaised(dpy, win);   // (정식 창은 위에서 이미 map 함)
   XFlush(dpy);
   GC gc = XCreateGC(dpy, win, 0, nullptr);
   Visual* visual = DefaultVisual(dpy, screen);
@@ -776,7 +753,6 @@ static int PreviewRun() {
     }
   }
   const bool shm_ok = bufs[0].img && bufs[1].img;
-  if (PvStage() == 3) return PvIdle();
   if (!shm_ok) {   // XShm 불가 시 예전 방식(단일 버퍼, XPutImage)으로 대체
     fallback_buf.resize((size_t)sw * sh * 4);
     printf("[preview] XShm 불가 - 일반 XPutImage 로 대체\n");
@@ -809,7 +785,7 @@ static int PreviewRun() {
       }
       if (bufs[cur].pending) {
         skipped_pending++;   // X 서버가 아직 직전 프레임을 못 그림 -> 이번 프레임은 못 보냄(프레임 드랍)
-      } else if (g_enc_ok && !getenv("CG_PV_NOEXPORT") && g_encoder.ExportPreviewBgrx((uint8_t*)bufs[cur].img->data, sw, sh)) {
+      } else if (g_enc_ok && g_encoder.ExportPreviewBgrx((uint8_t*)bufs[cur].img->data, sw, sh)) {
         XShmPutImage(dpy, win, gc, bufs[cur].img, 0, 0, 0, 0, sw, sh, True);
         bufs[cur].pending = true;
         XFlush(dpy);
@@ -853,12 +829,6 @@ static int PreviewRun() {
 static void PreviewLoop() {
   pthread_setname_np(pthread_self(), "cg-preview");
   SetRealtime("cg-preview", 49);
-  // CEF 가 화면을 준비(g_ready)할 때까지 기다린 뒤 창을 만든다. CEF/Chromium 이 X 를 초기화하는 중에 같은 프로세스에서 창을 만들면 (단말에서 확인) 다른 프로그램의 마우스 클릭이 안 먹는 문제가 있었다.
-  {
-    const char* d = getenv("CG_PV_DELAY");   // 시험용: 준비 후 추가로 기다릴 초
-    while (!g_quit && !g_ready) std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    for (int i = 0, n = (d ? atoi(d) : 2) * 10; i < n && !g_quit; i++) std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  }
   for (;;) {
     g_preview_reset = false;
     const int r = PreviewRun();
@@ -1304,7 +1274,7 @@ int main(int argc, char* argv[]) {
 
     if (g_encode) enc_thread = std::thread(EncodeLoop, client);
     if (g_preview) preview_thread = std::thread(PreviewLoop);
-    if ((g_preview || g_output_type == 1) && !getenv("CG_NO_DISPWATCH")) display_thread = std::thread(DisplayWatch);   // 시험용: CG_NO_DISPWATCH=1 이면 감시 스레드를 켜지 않음
+    if (g_preview || g_output_type == 1) display_thread = std::thread(DisplayWatch);   // 모니터를 뽑거나 꽂으면 배치를 자동으로 다시 계산
     udp_thread = std::thread(UdpLoop, client);
     http_thread = std::thread(HttpLoop, client);
     watcher = std::thread([&] {
