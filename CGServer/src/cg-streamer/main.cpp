@@ -863,8 +863,7 @@ static void DisplayWatch() {
       last = cur;
       stable = 0;
       pending.clear();
-      printf("[display] 모니터 연결 변경 감지(%s): 배치를 다시 계산합니다
-", cur.c_str());
+      printf("[display] 모니터 연결 변경 감지(%s): 배치를 다시 계산합니다\n", cur.c_str());
       ApplyDisplay();
     }
   }
