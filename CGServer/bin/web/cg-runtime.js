@@ -343,6 +343,10 @@ function drawShape(c, i) {
 const textCache = new Map();   // item.id -> {canvas, sig}
 function cachedTextCanvas(item, time) {
   const text = item.type === 'clock' || item.type === 'timer' ? clockText(item, time) : item.text;
+  // 매 프레임 큰 배열을 JSON 으로 직렬화하면 CPU/GC 부담으로 프레임이 튈 수 있다. 같은 항목 객체이고 글자·runs 가 그대로면 (프로젝트는
+  // 읽을 때 새 객체가 되므로 속성 변경은 항상 새 객체) 이전에 그려 둔 캔버스를 그대로 쓴다.
+  const hit = textCache.get(item.id);
+  if (hit && hit.item === item && hit.text === text && hit.runs === item.runs) return hit.canvas;
   const sig = JSON.stringify([text, item.size, item.family, item.bold, item.italic, item.fill, item.stroke,
     item.strokeWidth, item.edge2, item.edge2Width, item.edge3, item.edge3Width, item.w, item.h, item.align,
     item.kerning, item.space, item.textWidth, item.leading, item.thickness, item.underline, item.cRotate,
@@ -358,6 +362,7 @@ function cachedTextCanvas(item, time) {
     rec = { canvas: oc, sig };
     textCache.set(item.id, rec);
   }
+  rec.item = item; rec.text = text; rec.runs = item.runs;
   return rec.canvas;
 }
 
@@ -369,7 +374,10 @@ function drawItem(c, item, time, page) {
   c.save();
   c.globalAlpha *= item.opacity * v.opacity;
   const mo = moveOffset(item, time);
-  c.translate(item.x + v.x + mo.x, item.y + v.y + mo.y);
+  let tx = item.x + v.x + mo.x, ty = item.y + v.y + mo.y;
+  // crawl/roll 은 미리 그려 둔 글자 판을 drawImage 로 옮기는데, 소수점 위치면 매 프레임 보간이 달라져 글자 가장자리가 일렁이고 튀어 보인다 -> 정수 픽셀로 스냅.
+  if (state.effect === 'crawl' || state.effect === 'roll') { tx = Math.round(tx); ty = Math.round(ty); }
+  c.translate(tx, ty);
   c.rotate((item.rotation + v.rotation) * Math.PI / 180);
   c.scale(v.scaleX, v.scaleY);
   if (v.clip) { v.clip(c); c.clip(); }
