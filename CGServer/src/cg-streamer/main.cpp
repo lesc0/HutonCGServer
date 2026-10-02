@@ -132,6 +132,8 @@ static std::string g_state = "{\"ready\":false}";
 static std::atomic<bool> g_ready{false};   // player.html 로딩 완료 신호
 static std::atomic<bool> g_quit{false};
 static std::atomic<uint64_t> g_paints{0};
+// OnPaint 도착 간격 진단(1초 단위로 [stat] 에 출력 후 초기화): 가장 큰 간격(ms)과 25ms(60fps 의 1.5프레임) 넘게 늦은 횟수
+static std::atomic<uint32_t> g_gap_max_us{0}, g_gap_late{0}, g_gap_big{0};
 static pid_t g_child = 0;
 static CefRefPtr<CefMessageRouterBrowserSide> g_router;
 
@@ -237,6 +239,18 @@ class Client : public CefClient,
                const void* buffer, int w, int h) override {
     if (g_paint_mode != PaintMode::kSoftware) return;
     if (type != PET_VIEW || w != kW || h != kH) return;
+    {   // 도착 간격 진단
+      static auto last = std::chrono::steady_clock::time_point{};
+      const auto now = std::chrono::steady_clock::now();
+      if (last != std::chrono::steady_clock::time_point{}) {
+        const uint32_t us = (uint32_t)std::chrono::duration_cast<std::chrono::microseconds>(now - last).count();
+        uint32_t m = g_gap_max_us.load();
+        while (us > m && !g_gap_max_us.compare_exchange_weak(m, us)) {}
+        if (us > 25000) g_gap_late++;
+        if (us > 100000) g_gap_big++;
+      }
+      last = now;
+    }
 #if 0   // 진단용 OnPaint 덤프 (지금은 꺼둠: --no-encode 유휴 상태에서만 측정되어 판단 근거로 부적절했음)
     if (g_dumper.Active()) {
       if (std::chrono::steady_clock::now() < g_dump_t_end) g_dumper.PushFrame(buffer);
@@ -609,8 +623,9 @@ static void EncodeLoop(CefRefPtr<Client> client) {
         ql = g_store.q.size();
         dropped = g_store.dropped;
       }
-      printf("[stat] enc=%.1ffps paint=%llu/s out=%.2fMbps rga=%.1fms video=%s uiq=%zu under=%llu drop=%llu accel_fail=%llu\n",
-             frames / sec, (unsigned long long)(p - last_paints), bytes * 8.0 / sec / 1e6, g_encoder.TakeComposeMs(),
+      printf("[stat] enc=%.1ffps paint=%llu/s gap_max=%.0fms late25=%u big100=%u out=%.2fMbps rga=%.1fms video=%s uiq=%zu under=%llu drop=%llu accel_fail=%llu\n",
+             frames / sec, (unsigned long long)(p - last_paints), g_gap_max_us.exchange(0) / 1000.0, g_gap_late.exchange(0),
+             g_gap_big.exchange(0), bytes * 8.0 / sec / 1e6, g_encoder.TakeComposeMs(),
              g_hdmi.Active() ? (g_hdmi.HasSignal() ? "hdmirx" : "hdmirx(no-signal)")
                              : g_video.Active() ? "on" : "off", ql, (unsigned long long)underflows,
              (unsigned long long)dropped, (unsigned long long)g_accel_fail.load());
