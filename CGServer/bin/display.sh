@@ -60,7 +60,12 @@ if connected "$OUTPUT_OUT"; then
       xrandr --fb "$((CW > FW ? CW : FW))x$((CH > FH ? CH : FH))" 2>/dev/null
     fi
     xrandr --output "$OUTPUT_OUT" --mode "$M" --pos "${RX}x0" 2>/dev/null
-    MONS=$(mons)
+    # 모드/위치가 실제로 바뀔 때까지(최대 4초) 기다린 뒤 읽는다. 바로 읽으면 바뀌기 전 값이 기록되어 송출 창 크기가 모니터와 어긋남
+    for _ in $(seq 1 20); do
+      MONS=$(mons)
+      [ "$(geom_of "$OUTPUT_OUT")" = "$RX 0 $W $H" ] && break
+      sleep 0.2
+    done
   fi
   OG=$(geom_of "$OUTPUT_OUT")
   [ -n "$OG" ] && echo "$OG" > "$RUN/display-output.geom"
