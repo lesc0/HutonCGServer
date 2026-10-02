@@ -74,6 +74,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/XShm.h>
+#include <X11/extensions/shape.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #undef Success
@@ -695,7 +696,10 @@ static int PreviewRun() {
   Window win = XCreateWindow(dpy, RootWindow(dpy, screen), gx, gy, sw, sh, 0,
                               CopyFromParent, InputOutput, CopyFromParent,
                               CWOverrideRedirect | CWBackPixel, &attrs);
-  XMapRaised(dpy, win);
+  // 시험용 스위치(원인 분리): CG_PV_NOINPUT=1 창이 입력을 받지 않게(클릭이 아래 창으로 통과), CG_PV_LOWER=1 맨 위가 아니라 맨 아래로 둠
+  if (getenv("CG_PV_NOINPUT")) XShapeCombineRectangles(dpy, win, ShapeInput, 0, 0, nullptr, 0, ShapeSet, 0);
+  if (getenv("CG_PV_LOWER")) { XMapWindow(dpy, win); XLowerWindow(dpy, win); }
+  else XMapRaised(dpy, win);
   XFlush(dpy);
   GC gc = XCreateGC(dpy, win, 0, nullptr);
   Visual* visual = DefaultVisual(dpy, screen);
@@ -753,7 +757,7 @@ static int PreviewRun() {
       }
       if (bufs[cur].pending) {
         skipped_pending++;   // X 서버가 아직 직전 프레임을 못 그림 -> 이번 프레임은 못 보냄(프레임 드랍)
-      } else if (g_enc_ok && g_encoder.ExportPreviewBgrx((uint8_t*)bufs[cur].img->data, sw, sh)) {
+      } else if (g_enc_ok && !getenv("CG_PV_NOEXPORT") && g_encoder.ExportPreviewBgrx((uint8_t*)bufs[cur].img->data, sw, sh)) {
         XShmPutImage(dpy, win, gc, bufs[cur].img, 0, 0, 0, 0, sw, sh, True);
         bufs[cur].pending = true;
         XFlush(dpy);
