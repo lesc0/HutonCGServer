@@ -709,6 +709,15 @@ static int PreviewRun() {
   if (getenv("CG_PV_LOWER")) { XMapWindow(dpy, win); XLowerWindow(dpy, win); }
   else XMapRaised(dpy, win);
   if (PvStage() == 2) { XFlush(dpy); return PvIdle(); }
+  if (PvStage() == 4) {   // 진단: 창을 만든 뒤 X 연결을 닫아도 창은 남게(RetainPermanent) -> 열린 연결이 문제인지 확인
+    XSync(dpy, False);
+    printf("[preview] stage4 window=0x%lx
+", (unsigned long)win);
+    fflush(stdout);
+    XSetCloseDownMode(dpy, RetainPermanent);
+    XCloseDisplay(dpy);
+    return PvIdle();
+  }
   XFlush(dpy);
   GC gc = XCreateGC(dpy, win, 0, nullptr);
   Visual* visual = DefaultVisual(dpy, screen);
