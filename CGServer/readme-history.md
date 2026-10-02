@@ -784,3 +784,29 @@ env.md의 같은 체크리스트 절에 이 내용을 추가함.
 - `bin/rebuild.sh [--check]`: 실행 중이던 것(cg-streamer, 키오스크)을 기억 → `stop.sh`(송출·키오스크·에디터 정지) → `src/cg-editor/build.sh` → 원래 켜져 있던 것만 `start.sh`로 재시작. 빌드 실패 시에도 이전 빌드로 다시 띄움(종료 코드는 빌드 결과).
 - `bin/start.sh`에 `CG_SKIP_STREAMER=1` / `CG_SKIP_KIOSK=1` 환경변수 추가(해당 단계 건너뜀, rebuild.sh 가 사용). `.gitignore`에 `!bin/rebuild.sh`.
 - 효과: 송출·키오스크를 내린 상태에서는 빌드의 타입 검사가 5.6초에 끝남(송출 중에는 3분 이상 걸리거나 OOM). 이후 에디터 빌드는 `bin/rebuild.sh` 사용 권장.
+
+## 2026-10-02 — HDMI 입력 음성이 무음으로 송출되던 문제 수정
+
+### 증상
+- cg-streamer 가 HDMI IN(`rk_hdmirx`) 라이브 소스일 때 음성도 AAC 로 인코딩해 TS 로 보내는데, 송출 TS 의 음성이 완전 무음(-91dB)이고 player 에서 소리가 안 남.
+  로그에는 `[hdmirx] 음성 캡처 시작`이 수천 번 반복(캡처를 열자마자 read 실패 → 복구 실패 → 닫고 재오픈 루프). mp4 영상의 음성은 정상(-11dB).
+
+### 진단 (테스트 단말 CM3588, 커널 6.1.141)
+- 송출을 단말 자신(`CG_UDP=10.10.10.56:1234`)으로 보내 `ffmpeg -c copy` 로 받아 `ffprobe`/`volumedetect` 로 확인. 스트림 구조(H.264 + AAC 48k 스테레오)는 정상, 음성 값만 무음.
+- 스트리머 없이 `arecord -D plughw:CARD=rockchiphdmiin,DEV=0 -f S16_LE -r 48000 -c 2` 도 `read error: Input/output error`. HDMI 수신기 쪽은 `audio_present: 1`, `audio on`(48000/2ch).
+- 사용자가 `arecord -D hw:0,0 ... --period-size=1024 --buffer-size=4096` 은 된다고 알려 줌. 그래서 버퍼 크기가 원인인지 확인했는데 `--buffer-time=100000` 만 줘도 되고 기본값만 안 됨 → 크기 문제가 아니었음.
+- python ctypes 로 앱과 같은 호출(`snd_pcm_open` → `snd_pcm_set_params(…, 100000)` → `snd_pcm_readi`)을 재현: `readi` 가 계속 -5(EIO). 사이에 `snd_pcm_start()` 를 넣으면 `[1024, 1024, …]` 로 정상 + 실제 신호. `hw_params` 로 period 1024/buffer 4096 을 직접 지정해도 정상.
+- **원인**: 이 보드(rk_hdmirx 캡처 카드)는 `readi` 의 자동 시작(PREPARED → 시작)이 EIO 로 실패해서, 열고 나서 `snd_pcm_start()` 를 명시적으로 불러야 한다.
+
+### 수정 (`src/cg-streamer/hdmirx_source.cpp`, 커밋 af92fae)
+- libasound 를 dlopen 하는 `AudioRun` 에 `snd_pcm_start` 심볼 추가. 캡처를 열고 `set_params` 직후 `start` 호출(실패하면 닫고 500ms 뒤 재시도).
+- 에러 복구(`snd_pcm_recover`) 뒤에도 `start` 를 다시 호출. recover/start 가 실패하면 닫고 다시 연다.
+
+### 검증
+- 단말에서 `git pull` → `cmake --build --preset rk3588` 빌드 성공 → `수영-기록` 프로젝트(HDMI 소스)를 자기 자신으로 송출해 받아 확인: 음성 mean -25.8dB / max -10.3dB(수정 전 -91dB 무음), `음성 캡처 시작` 로그 1회(반복 없음). 이후 사용자가 player 에서 소리가 나옴을 확인.
+
+### 운영 메모
+- 단말에서 ssh 로 `pgrep -f "cg-streamer --run"` 처럼 패턴을 명령줄에 포함하면 ssh 로 실행한 셸 자신이 매칭돼서 `start.sh` 가 "이미 실행 중"으로 오인해 시작을 건너뜀(실제로 스트리머가 안 뜬 채 지나갈 뻔함). 확인할 때는 `ps -eo pid,etime,args | grep "[.]/cg-streamer"` 처럼 쓸 것.
+- 비대화형 ssh(비밀번호)가 필요하면 `SSH_ASKPASS` 스크립트 + `SSH_ASKPASS_REQUIRE=force` 로 가능(sshpass 없는 Windows Git Bash).
+- 단말의 `bin/cgsetup.cfg`, `bin/project/가로스크롤-예제.json` 에 로컬 수정이 남아 있음(의도 확인 필요).
+- 페이지 전환(`next` 명령) 테스트 중 로그에 `*** stack smashing detected ***` 가 한 번 찍힘(프로세스는 계속 동작). 원인 미확인 — 재현되면 추적.
