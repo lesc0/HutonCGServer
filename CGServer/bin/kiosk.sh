@@ -41,7 +41,7 @@ start() {
     scale=$(awk -v w="${gw:-1600}" -v h="${gh:-900}" 'BEGIN{s=w/1600; t=h/900; if(t<s)s=t; if(s>1)s=1; printf "%.2f", s}')
   fi
   pos+=(--force-device-scale-factor="$scale")
-  setsid nohup "$CHROMIUM" --kiosk "${pos[@]}" --noerrdialogs --disable-infobars --no-first-run --disable-features=Translate \
+  setsid nohup "$CHROMIUM" --kiosk "${pos[@]}" --noerrdialogs --disable-infobars --no-first-run --lang=ko-KR --disable-features=Translate,TranslateUI \
     --user-data-dir="$KIOSK_PROFILE" "http://localhost:$port" \
     > log/chromium-kiosk.log 2>&1 &
   echo $! > "$PIDF"
