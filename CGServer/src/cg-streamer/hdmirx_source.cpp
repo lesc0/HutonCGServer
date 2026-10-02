@@ -17,6 +17,7 @@
 #include <rga/rga.h>
 
 #include "audio_mixer.h"
+#include "rt.h"
 
 static int Xioctl(int fd, unsigned long req, void* arg) {
   int r;
@@ -38,6 +39,7 @@ bool HdmiRxSource::Start(const std::string& dev) {
 // HDMI 수신 칩의 I2S 캡처 카드("rockchiphdmiin")를 plughw 로 열어 48kHz S16 스테레오로 받는다.
 void HdmiRxSource::AudioRun() {
   pthread_setname_np(pthread_self(), "cg-hdmi-aud");
+  SetRealtime("cg-hdmi-aud", 48);
   struct Api {
     int (*open)(void**, const char*, int, int);
     int (*set_params)(void*, int, int, unsigned, unsigned, int, unsigned);
@@ -123,6 +125,7 @@ void HdmiRxSource::Release() { mu_.unlock(); }
 
 void HdmiRxSource::Run(std::string dev) {
   pthread_setname_np(pthread_self(), "cg-hdmirx");
+  SetRealtime("cg-hdmirx", 48);
   printf("[hdmirx] start %s\n", dev.c_str());
   while (!stop_) {
     if (!Session(dev)) std::this_thread::sleep_for(std::chrono::milliseconds(500));   // 신호 대기 후 재시도

@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "ts_muxer.h"
+#include "rt.h"
 
 static constexpr int kBlock = TsMuxer::kAudioFrame;
 static constexpr double kLiveLatency = 0.12;   // HDMI 음성 지연(초): 캡처 지터 흡수 + 영상 인코딩 지연 보정
@@ -84,6 +85,7 @@ void AudioMixer::Clear() {
 
 void AudioMixer::Run() {
   pthread_setname_np(pthread_self(), "cg-audio");
+  SetRealtime("cg-audio", 48);
   std::vector<float> blk(kBlock * 2);
   int64_t n = 0;
   while (!stop_) {
@@ -120,6 +122,7 @@ void AudioMixer::Run() {
 // 로컬 재생: libasound.so.2 를 dlopen (캡처와 같은 방식). 장치가 없거나 에러면 닫고 재시도한다.
 void AudioMixer::LocalRun() {
   pthread_setname_np(pthread_self(), "cg-audio-out");
+  SetRealtime("cg-audio-out", 47);
   struct Api {
     int (*open)(void**, const char*, int, int);
     int (*set_params)(void*, int, int, unsigned, unsigned, int, unsigned);

@@ -67,6 +67,7 @@
 #include "video_source.h"
 #include "ts_muxer.h"
 #include "audio_mixer.h"
+#include "rt.h"
 #include "cef_dumper.h"
 
 // X11 은 CEF 헤더 뒤에 포함(Success/None 등 매크로가 CEF의 동명 심볼과 충돌).
@@ -517,6 +518,7 @@ class WinDelegate : public CefWindowDelegate {
 // ---------- 실행 모드 보조 스레드 ----------
 static void EncodeLoop(CefRefPtr<Client> client) {
   pthread_setname_np(pthread_self(), "cg-encode");
+  SetRealtime("cg-encode", 50);
   if (!g_encoder.Init(kW, kH, g_fps, kBitrate)) { g_quit = true; return; }
   g_enc_ok = true;
   TsMuxer mux;
@@ -772,6 +774,7 @@ static bool PreviewRun() {
 
 static void PreviewLoop() {
   pthread_setname_np(pthread_self(), "cg-preview");
+  SetRealtime("cg-preview", 49);
   do { g_preview_reset = false; } while (PreviewRun());
 }
 

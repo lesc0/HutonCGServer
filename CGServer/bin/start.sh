@@ -42,6 +42,9 @@ fi
 bash ./display.sh
 
 if [ "${CG_SKIP_STREAMER:-0}" = 1 ]; then echo "[2/3] cg-streamer 건너뜀(CG_SKIP_STREAMER=1)"; else
+# 표시/인코딩/음성 스레드를 SCHED_FIFO 로 올리려면 실시간 우선순위 한도가 필요하다(없으면 엔진이 일반 스케줄링으로 동작).
+# 한 번만: sudo sh -c 'echo "pi - rtprio 90" > /etc/security/limits.d/99-cg-rt.conf' 후 다시 로그인.
+[ "$(ulimit -r)" = 0 ] && echo "  참고: 실시간 우선순위(ulimit -r)가 0 이라 SCHED_FIFO 를 쓸 수 없음 (위 limits.d 설정 필요)"
 echo "[2/3] cg-streamer (project=${PROJECT:-(빈 프로젝트)}, 송출 설정은 cgsetup.cfg${CG_UDP:+", udp=$CG_UDP(override)"})"
 if pgrep -f "cg-streamer --run" >/dev/null; then
   echo "  이미 실행 중"
