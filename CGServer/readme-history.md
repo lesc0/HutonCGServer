@@ -2,7 +2,7 @@
 
 ## 2026-10-02 (이어서 9) — Attributes 가운데 칸(Name/자막 내용) 폭 축소
 
-- Attributes 탭 가운데 칸(`.textproperties`: Name 입력, 자막 내용 입력, 선택 안내 + 전체 적용 버튼)의 폭을 `flex:0 0 239px` → **140px** 로 줄임(`globals.css` 마지막 덮어쓰기 규칙). 줄어든 폭은 나머지 칸이 가져감. 안내 문구는 줄바꿈되어 표시. Font 칸(`.fontproperties`)도 `285px` → **250px** 로 조금 줄임. 오른쪽 색 대상 버튼(F/E-1/E-2/E-3/S, `.facebuttons`)은 줄바꿈을 막고 한 줄로 균등 분배(색 띠 10→5px, 칸 최소 폭 140px). 더 줄이거나 늘리려면 같은 줄의 `140px`/`250px` 만 바꾸면 됨.
+- Attributes 탭 가운데 칸(`.textproperties`: Name 입력, 자막 내용 입력, 선택 안내 + 전체 적용 버튼)의 폭을 `flex:0 0 239px` → **140px** 로 줄임(`globals.css` 마지막 덮어쓰기 규칙). 줄어든 폭은 나머지 칸이 가져감. 안내 문구는 줄바꿈되어 표시. Font 칸(`.fontproperties`)도 `285px` → **250px** 로 조금 줄임. 오른쪽 색 대상 버튼(F/E-1/E-2/E-3/S, `.facebuttons`)은 줄바꿈을 막고 한 줄로 배치: 최소 2px 간격(`gap:2px`) + `justify-content:space-between` 으로 남는 폭은 버튼 사이에 균등 분배(색 띠 10→5px, 칸 최소 폭 140px). 더 줄이거나 늘리려면 같은 줄의 `140px`/`250px` 만 바꾸면 됨.
 
 ## 2026-10-02 (이어서 8) — Effects 시간 항목 이름 변경 (Duration/Length/Begin)
 
