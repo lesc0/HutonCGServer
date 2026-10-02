@@ -133,6 +133,13 @@
 - 우클릭 컨텍스트 메뉴 항목에 아이콘 추가(lucide): 복사(Copy) · 붙여넣기(ClipboardPaste) · 그룹(Group) · 그룹 해제(Ungroup) · 화면 전체 크기로(Maximize2) · 배경객체 고정(Pin) · 위치 고정 해제(UnlockKeyhole) · 숨기기(EyeOff) · 삭제(Trash2) · 닫기(X). 항목은 [이름, 동작, 아이콘] 으로 정의.
 - 참고: 화면 60% 이상을 차지하는 개체는 드래그 이동이 막히므로(먼저 클릭해 선택하면 이동 가능) 위치는 Attributes 의 X/Y 로도 바꿀 수 있음.
 
+### 12) 페이지 모드(Still/Roll/Crawl) 설정 위치와 동작을 도움말에 추가
+
+- 질문: 페이지의 Still/Roll 설정은 어디서 하나. 위치: **Timeline 탭 툴바**, 전체 길이(초) 입력 옆의 "페이지 모드" 콤보박스(`Still`/`Roll`/`Crawl`/`MultiLayer`, `timeline.tsx`). 기본 탭이 Output Stream Control 이라 Timeline 탭을 먼저 눌러야 보임.
+- 동작(`model.ts effectState`): Still = 개체별 Effects. Roll/Crawl = `background` 가 아닌 **모든 개체**가 효과와 무관하게 세로/가로로 흐름(진행은 개체 Show Time 전체에 걸쳐 0→100%, 속도는 Speed). 우클릭 "배경객체 고정"을 적용한 개체는 제자리. MultiLayer 는 별도 스크롤 처리 없음(Still 과 같음).
+- 개체 하나만 흘리려면 Still 모드에서 그 개체의 Effects 를 Crawl/Roll 로 지정(`가로스크롤-예제` 방식).
+- 도움말(사용 방법)에 위 내용을 한 문단으로 추가.
+
 ## 2026-10-01 (이어서 3) — 업스트림 병합, start.sh 기본 production, 패널 배치, stop.sh 보강
 
 ### git 업스트림 받기 (충돌 해결)
