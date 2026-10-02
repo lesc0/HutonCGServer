@@ -673,6 +673,13 @@ static bool ReadOutputGeom(int& x, int& y, int& w, int& h) {
 }
 
 // 반환: true = 화면 해상도 변경으로 다시 만들어야 함, false = 종료/실패
+// 시험용(원인 분리): CG_PV_STAGE=1 X 연결까지만, 2 창을 띄우기까지만, 3 공유 메모리 준비까지만 하고 대기. 기본(없음)은 전부 실행.
+static int PvStage() { const char* s = getenv("CG_PV_STAGE"); return s ? atoi(s) : 99; }
+static int PvIdle() {
+  while (!g_quit && !g_preview_reset) std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  return (g_preview_reset && !g_quit) ? 1 : 0;
+}
+
 // 반환: 0 = 종료/실패, 1 = 송출 모니터 영역이 바뀌어 다시 만들어야 함, 2 = 송출 모니터가 없어 창을 띄우지 않음(모니터가 생길 때까지 기다림)
 static int PreviewRun() {
   Display* dpy = XOpenDisplay(nullptr);
@@ -685,6 +692,7 @@ static int PreviewRun() {
     XCloseDisplay(dpy);
     return 2;
   }
+  if (PvStage() == 1) { XCloseDisplay(dpy); return PvIdle(); }
   g_preview_x = gx;
   g_preview_y = gy;
   g_preview_w = sw;
@@ -700,6 +708,7 @@ static int PreviewRun() {
   if (getenv("CG_PV_NOINPUT")) XShapeCombineRectangles(dpy, win, ShapeInput, 0, 0, nullptr, 0, ShapeSet, 0);
   if (getenv("CG_PV_LOWER")) { XMapWindow(dpy, win); XLowerWindow(dpy, win); }
   else XMapRaised(dpy, win);
+  if (PvStage() == 2) { XFlush(dpy); return PvIdle(); }
   XFlush(dpy);
   GC gc = XCreateGC(dpy, win, 0, nullptr);
   Visual* visual = DefaultVisual(dpy, screen);
@@ -725,6 +734,7 @@ static int PreviewRun() {
     }
   }
   const bool shm_ok = bufs[0].img && bufs[1].img;
+  if (PvStage() == 3) return PvIdle();
   if (!shm_ok) {   // XShm 불가 시 예전 방식(단일 버퍼, XPutImage)으로 대체
     fallback_buf.resize((size_t)sw * sh * 4);
     printf("[preview] XShm 불가 - 일반 XPutImage 로 대체\n");
