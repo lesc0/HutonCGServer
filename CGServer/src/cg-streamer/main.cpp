@@ -844,10 +844,14 @@ static void DisplayWatch() {
   auto sig = [] {
     std::string s;
     for (const char* n : {"HDMI-A-1", "HDMI-A-2"}) {
-      std::ifstream f(std::string("/sys/class/drm/card0-") + n + "/status");
+      const std::string base = std::string("/sys/class/drm/card0-") + n;
+      std::ifstream f(base + "/status");
       std::string v;
       f >> v;
-      s += v + ";";
+      // 모니터를 서로 바꿔 꽂아도 두 포트가 계속 connected 로 보일 수 있으므로 모니터의 EDID(제품 식별 정보) 내용도 신호에 넣는다
+      std::ifstream e(base + "/edid", std::ios::binary);
+      const std::string edid((std::istreambuf_iterator<char>(e)), std::istreambuf_iterator<char>());
+      s += v + ":" + std::to_string(std::hash<std::string>{}(edid) % 100000) + ";";
     }
     return s;
   };
