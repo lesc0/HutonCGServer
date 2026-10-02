@@ -109,6 +109,8 @@ static std::condition_variable g_pv_cv;
 static uint64_t g_pv_seq = 0;
 static std::atomic<bool> g_preview_reset{false};          // 로컬 화면 해상도가 바뀌어 미리보기 창을 다시 만들어야 함
 static std::atomic<int> g_preview_w{0}, g_preview_h{0};   // 현재 미리보기 창 크기
+static std::atomic<int> g_preview_x{0}, g_preview_y{0};   // 현재 미리보기 창 위치(모니터 두 대일 때 송출 모니터 위치)
+static std::string g_output_display = "HDMI-2";           // 송출 화면을 보여 줄 모니터(cgsetup.cfg output_display). 에디터는 editor_display(기본 HDMI-1)
 static std::string g_page = "player.html";   // --page=이름.html : 진단/테스트용, bin/web/ 기준 다른 페이지 로드
 
 // cgsetup.cfg: output=1(HDMI만) 2(UDP만, 기본) 3(HDMI+UDP) / udp_ip / udp_port
@@ -217,6 +219,7 @@ static void LoadSetupCfg(const std::string& path) {
     else if (k == "udp_ip") g_udp_ip = v;
     else if (k == "udp_port") g_udp_port = atoi(v.c_str());
     else if (k == "audio_out") g_audio_out = v;
+    else if (k == "output_display") g_output_display = v;
     else if (k == "fps") g_fps = std::max(1, atoi(v.c_str()));
   }
 }
@@ -658,19 +661,31 @@ static void EncodeLoop(CefRefPtr<Client> client) {
 // - 버퍼가 1장뿐이면 X 서버가 아직 그 메모리를 화면에 옮기는 중에 RGA 가 같은 메모리를 새 프레임으로
 //   덮어써서 화면이 찢어지거나 깨져 보일 수 있다(단일버퍼 티어링) -> 버퍼 2장을 번갈아 쓰고, 각
 //   버퍼는 직전 XShmPutImage 의 ShmCompletion 이벤트(=X 서버가 다 읽음)를 받은 뒤에만 재사용한다.
+// display.sh 가 기록한 송출 모니터 영역("x y w h", bin/.run/display-output.geom)을 읽는다. 없거나 잘못되면 false(호출한 쪽의 기본값 유지).
+static bool ReadOutputGeom(int& x, int& y, int& w, int& h) {
+  std::ifstream f(std::filesystem::path(g_exe).parent_path() / ".run" / "display-output.geom");
+  int a, b, c, d;
+  if (!(f >> a >> b >> c >> d) || c <= 0 || d <= 0 || a < 0 || b < 0) return false;
+  x = a; y = b; w = c; h = d;
+  return true;
+}
+
 // 반환: true = 화면 해상도 변경으로 다시 만들어야 함, false = 종료/실패
 static bool PreviewRun() {
   Display* dpy = XOpenDisplay(nullptr);
   if (!dpy) { fprintf(stderr, "[preview] XOpenDisplay 실패 (DISPLAY 필요)\n"); return false; }
   int screen = DefaultScreen(dpy);
-  int sw = DisplayWidth(dpy, screen), sh = DisplayHeight(dpy, screen);
+  int sw = DisplayWidth(dpy, screen), sh = DisplayHeight(dpy, screen), gx = 0, gy = 0;
+  ReadOutputGeom(gx, gy, sw, sh);   // display.sh 가 기록한 송출 모니터 영역(없으면 화면 전체)
+  g_preview_x = gx;
+  g_preview_y = gy;
   g_preview_w = sw;
   g_preview_h = sh;
 
   XSetWindowAttributes attrs{};
   attrs.override_redirect = True;
   attrs.background_pixel = BlackPixel(dpy, screen);
-  Window win = XCreateWindow(dpy, RootWindow(dpy, screen), 0, 0, sw, sh, 0,
+  Window win = XCreateWindow(dpy, RootWindow(dpy, screen), gx, gy, sw, sh, 0,
                               CopyFromParent, InputOutput, CopyFromParent,
                               CWOverrideRedirect | CWBackPixel, &attrs);
   XMapRaised(dpy, win);
@@ -791,10 +806,12 @@ static void ApplyDisplay() {
     }
     if (g_preview && g_preview_w > 0) {   // 새 연결로 현재 X 화면 크기를 읽어 창 크기와 비교
       if (Display* d = XOpenDisplay(nullptr)) {
-        const int w = DisplayWidth(d, DefaultScreen(d)), h = DisplayHeight(d, DefaultScreen(d));
+        int w = DisplayWidth(d, DefaultScreen(d)), h = DisplayHeight(d, DefaultScreen(d)), x = 0, y = 0;
         XCloseDisplay(d);
-        if (w != g_preview_w || h != g_preview_h) {
-          printf("[display] 화면 크기 변경 %dx%d -> %dx%d: 미리보기 창 다시 만듦\n", (int)g_preview_w, (int)g_preview_h, w, h);
+        ReadOutputGeom(x, y, w, h);
+        if (w != g_preview_w || h != g_preview_h || x != g_preview_x || y != g_preview_y) {
+          printf("[display] 송출 화면 영역 변경 %dx%d+%d+%d -> %dx%d+%d+%d: 미리보기 창 다시 만듦\n", (int)g_preview_w, (int)g_preview_h,
+                 (int)g_preview_x, (int)g_preview_y, w, h, x, y);
           g_preview_reset = true;
         }
       }
@@ -1069,11 +1086,18 @@ int main(int argc, char* argv[]) {
     std::string dev = g_audio_out;
     if (dev == "auto" || dev.empty()) {   // 연결된 HDMI 커넥터 -> 소리 카드 (HDMI-A-1=rockchiphdmi0, HDMI-A-2=rockchiphdmi1)
       dev.clear();
-      for (int i = 1; i <= 2 && dev.empty(); i++) {
+      // 송출 모니터(output_display, 기본 HDMI-2)가 연결되어 있으면 그 쪽 소리 카드를 우선하고, 아니면 연결된 첫 HDMI(모니터가 한 대일 때)
+      auto connected = [](int i) {
         std::ifstream st("/sys/class/drm/card0-HDMI-A-" + std::to_string(i) + "/status");
         std::string s;
-        if (st >> s && s == "connected") dev = "plughw:CARD=rockchiphdmi" + std::to_string(i - 1) + ",DEV=0";
-      }
+        return (st >> s) && s == "connected";
+      };
+      int want = 0;
+      if (g_output_display.size() >= 6 && g_output_display.compare(0, 5, "HDMI-") == 0) want = atoi(g_output_display.c_str() + 5);
+      int pick = (want >= 1 && want <= 2 && connected(want)) ? want : 0;
+      for (int i = 1; i <= 2 && !pick; i++)
+        if (connected(i)) pick = i;
+      if (pick) dev = "plughw:CARD=rockchiphdmi" + std::to_string(pick - 1) + ",DEV=0";   // HDMI-A-1=rockchiphdmi0, HDMI-A-2=rockchiphdmi1
     }
     if (!dev.empty()) g_audio.SetLocalOut(dev);
   }

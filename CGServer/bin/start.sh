@@ -62,7 +62,12 @@ echo "[3/3] Chromium 키오스크 (cg-editor 화면)"
 if [ -f "$CHROMIUM_PIDF" ] && kill -0 "$(cat "$CHROMIUM_PIDF")" 2>/dev/null; then
   echo "  이미 실행 중"
 else
-  DISPLAY="$DISPLAY" nohup "$CHROMIUM" --kiosk --noerrdialogs --disable-infobars --no-first-run \
+  # 에디터 모니터(display.sh 가 기록한 .run/display-editor.geom "x y w h")에 띄운다. 모니터가 두 대면 에디터 쪽 모니터, 한 대면 그 모니터.
+  KIOSK_POS=()
+  if read -r gx gy gw gh < .run/display-editor.geom 2>/dev/null && [ -n "${gh:-}" ]; then
+    KIOSK_POS=(--window-position="$gx,$gy" --window-size="$gw,$gh")
+  fi
+  DISPLAY="$DISPLAY" nohup "$CHROMIUM" --kiosk "${KIOSK_POS[@]}" --noerrdialogs --disable-infobars --no-first-run \
     --user-data-dir="$KIOSK_PROFILE" "http://localhost:$PORT" \
     > log/chromium-kiosk.log 2>&1 &
   echo $! > "$CHROMIUM_PIDF"
