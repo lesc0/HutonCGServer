@@ -147,7 +147,7 @@
 - cg-streamer: 미리보기 창을 `display-output.geom` 위치/크기(송출 모니터)에 만듦(없으면 화면 전체). reload/Switch/`POST /display` 때 영역(위치·크기)이 달라지면 창을 다시 만듦. 로컬 음성 `audio_out=auto` 는 `output_display` 모니터의 소리 카드(HDMI-A-N → rockchiphdmi(N-1))를 우선, 그 모니터가 없으면 연결된 첫 HDMI.
 - `start.sh`: 키오스크 Chromium 을 `display-editor.geom` 위치/크기(`--window-position/--window-size`)로 띄움. `cgsetup.cfg` 에 `editor_display`, `output_display` 추가(다른 포트로 바꾸려면 여기만 수정).
 - 검증: 가짜 `xrandr` 로 두 대(1920x1080 + 1024x600 → 화면 2944x1080, HDMI-1 `0 0 1920 1080`, HDMI-2 `1920 0 1024 600`)와 한 대 경로의 호출/좌표를 확인. 단말에서는 한 대 상태로 동작 확인(미리보기 1024x600, 음성 연결된 HDMI 카드). **실제 모니터 두 대 연결 상태는 미확인**.
-- 실수 정정: 이 커밋(`38e9714`)에 `git add -A src` 로 작업 폴더에서 이미 지워져 있던 `src/cg-editor/AGENTS.md`, `CLAUDE.md` 삭제가 섞여 올라갔음 -> `8b2f6a4` 에서 복원. 앞으로는 `git add` 에 파일을 명시.
+- 참고: `src/cg-editor/AGENTS.md`, `CLAUDE.md` 는 사용자가 직접 삭제한 것(이 커밋 `38e9714` 에 삭제가 함께 올라감). 이를 실수로 보고 `8b2f6a4` 에서 복원했다가 다시 삭제함. 앞으로는 `git add` 에 파일을 명시.
 
 ## 2026-10-01 (이어서 3) — 업스트림 병합, start.sh 기본 production, 패널 배치, stop.sh 보강
 
