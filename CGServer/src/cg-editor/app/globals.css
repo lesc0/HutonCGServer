@@ -175,3 +175,5 @@ input:disabled,textarea:disabled{background:#0a0d15;color:#55617c}
 @media(min-width:1650px){.shape-stylegrid{grid-template-columns:repeat(5,minmax(0,1fr))}}
 .page-stylegrid{grid-template-columns:repeat(2,minmax(0,1fr))}.page-stylegrid button{min-width:0;overflow:hidden;min-height:0;height:auto}.page-stylegrid span{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .page-stylegrid{grid-auto-rows:max-content}.page-stylegrid .thumb{height:64px;aspect-ratio:auto;border:1px solid #23283a}.page-stylegrid .thumbmode,.page-stylegrid .thumbcut{display:none}
+
+.effectpresets .preset-short{display:block;font-size:10px;line-height:1.15;color:#9fc3f3;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
