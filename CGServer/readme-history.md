@@ -1,5 +1,15 @@
 # 작업 히스토리 (cef_mpp / zcgserver)
 
+## 2026-10-02 (이어서 3) — Output Stream Control 이 적용 중인 프로젝트를 보여줌, 마지막 적용 프로젝트로 시작, 첫 실행은 빈 프로젝트
+
+- **엔진 상태에 `file` 추가**: `GET /status` 응답에 현재 적용된 프로젝트 **파일 이름**(.json 제외)을 `file` 로 넣음(프로젝트 안의 `name` 은 파일명과 다를 수 있음: 예 파일 `생활정보-문자방송` ↔ name `생활정보 문자방송`). 적용된 프로젝트 파일이 없으면 `file` 은 생략.
+- **Output Stream Control (`stream-control.tsx`)**: 콤보박스를 `status.file` 로 선택해 보여 줌. 이전에는 목록의 첫 항목(가나다순)을 임의로 골라 실제 송출 중인 프로젝트와 달랐음. 사용자가 직접 고르기 전까지는 엔진 쪽 변경(다른 곳에서 Switch, 재시작)도 따라가고, Switch project 후 다시 엔진을 따라감. 적용된 프로젝트가 없으면 `(no project applied)` 로 비워 둠.
+- **마지막 적용 프로젝트 기록**: Switch project 성공 시 `bin/.run/last-project` 에 파일 이름 기록. `bin/start.sh` 는 `CG_PROJECT` 가 없으면 이 기록으로 시작(이전엔 항상 `자막프로젝트`). **기록이 없는 첫 실행이면 빈 프로젝트**(없는 파일 `project/.none.json` 을 주어 엔진 대기 상태 `{"ready":false}`)로 시작. 기록된 파일이 사라졌어도 빈 프로젝트.
+- **대기 상태에서 Switch/Reload 가 안 되던 버그**: 프로젝트 없이 뜬 플레이어는 프레임 루프가 안 돌아 `cg.cmd("reload")` 로는 시작되지 않음(status 계속 `ready:false`, paint=0). 대기 상태(`"ready":true` 가 상태에 없음)일 때는 `location.reload()` 로 페이지를 새로 불러오도록 함(`ReloadJs`).
+- **에디터 기본 탭**: Timeline / Playback 창의 기본 탭을 `Timeline` → **`Output Stream Control`** 로 변경(`page.tsx` 의 `playTab` 초기값). 에디터는 원래 빈 프로젝트(`initial()`, 빈 페이지 4장)로 시작하므로 처음 열면 이 탭이 보임.
+- 검증(단말): 기록 삭제 후 시작 → `{"ready":false}`(빈 프로젝트) → Switch `생활정보-문자방송` → ready:true, `last-project` 기록 → 재시작하면 기록된 프로젝트로 시작. 확인 후 `자막프로젝트` 로 되돌려 둠.
+- 주의: 이 변경 이후 `last-project` 기록이 없는 단말을 재시작하면 빈 프로젝트(대기)로 뜸. 기존처럼 `자막프로젝트` 로 시작하려면 한 번 Switch project 로 지정하거나 `CG_PROJECT=자막프로젝트 ./start.sh`.
+
 ## 2026-10-02 (이어서 2) — 해상도 재설정 명령 (Reload / Switch project 에 포함)
 
 - 배경: 해상도 자동 설정이 `start.sh` 실행 시점에만 돼서, 스트리머를 켜 둔 채 모니터를 바꿔 꽂으면(`xrandr --fb` 로 고정된 X 화면 + 시작 시 한 번 만든 미리보기 창) 반영이 안 됨.
