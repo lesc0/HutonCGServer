@@ -10,7 +10,8 @@
 #
 # 송출 설정(output 1/2/3, udp_ip, udp_port)과 에디터 포트(editor_port)는 cgsetup.cfg 에서 관리.
 # 환경변수로 바꿀 수 있음 (기본값은 지금 쓰던 값):
-#   CG_PROJECT=자막프로젝트     송출할 프로젝트 이름 (bin/project/<이름>.json)
+#   CG_PROJECT=자막프로젝트     송출할 프로젝트 이름 (bin/project/<이름>.json). 지정하지 않으면 마지막으로 적용한(Switch project) 프로젝트(.run/last-project),
+#                               기록이 없는 첫 실행이면 빈 프로젝트(엔진 대기 상태)로 시작
 #   CG_UDP=10.10.10.18:1234    cgsetup.cfg 의 udp_ip/udp_port 대신 쓸 목적지 (임시 테스트용, 지정 시 cfg보다 우선)
 #   CG_EDITOR_PORT=8080        cg-editor 포트 (기본: cgsetup.cfg 의 editor_port)
 #   CG_SKIP_STREAMER=1 / CG_SKIP_KIOSK=1   cg-streamer / 키오스크는 시작하지 않음 (rebuild.sh 가 사용)
@@ -19,7 +20,8 @@ set -u
 cd "$(dirname "$(readlink -f "$0")")"
 mkdir -p log .run
 
-PROJECT=${CG_PROJECT:-자막프로젝트}
+PROJECT=${CG_PROJECT:-$(cat .run/last-project 2>/dev/null | head -1 | tr -d '\r\n')}
+[ -n "$PROJECT" ] && [ -f "project/$PROJECT.json" ] || PROJECT=   # 기록이 없거나 파일이 사라졌으면 빈 프로젝트로 시작(없는 경로를 주면 엔진은 대기 상태)
 # 에디터 포트: 환경변수 CG_EDITOR_PORT > cgsetup.cfg 의 editor_port > cg-editor/.env.production > 5173
 CFG_PORT=$(sed -n 's/#.*//; s/^[[:space:]]*editor_port[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' cgsetup.cfg 2>/dev/null | tail -1)
 PORT=${CG_EDITOR_PORT:-${CFG_PORT:-$(set -a; . ../src/cg-editor/.env 2>/dev/null; . ../src/cg-editor/.env.production 2>/dev/null; echo "${CG_EDITOR_PORT:-5173}")}}
@@ -40,11 +42,11 @@ fi
 bash ./display.sh
 
 if [ "${CG_SKIP_STREAMER:-0}" = 1 ]; then echo "[2/3] cg-streamer 건너뜀(CG_SKIP_STREAMER=1)"; else
-echo "[2/3] cg-streamer (project=$PROJECT, 송출 설정은 cgsetup.cfg${CG_UDP:+", udp=$CG_UDP(override)"})"
+echo "[2/3] cg-streamer (project=${PROJECT:-(빈 프로젝트)}, 송출 설정은 cgsetup.cfg${CG_UDP:+", udp=$CG_UDP(override)"})"
 if pgrep -f "cg-streamer --run" >/dev/null; then
   echo "  이미 실행 중"
 else
-  nohup ./cg-streamer --run --project="project/$PROJECT.json" ${CG_UDP:+--udp="$CG_UDP"} --gpu --cef:use-angle=gles-egl --autoplay \
+  nohup ./cg-streamer --run --project="project/${PROJECT:-.none}.json" ${CG_UDP:+--udp="$CG_UDP"} --gpu --cef:use-angle=gles-egl --autoplay \
     > log/cg-streamer.log 2>&1 &
   disown
   sleep 2

@@ -901,8 +901,12 @@ static void HttpHandle(int fd, CefRefPtr<Client> client) {
 
   if (seg[0] == "status" && seg.size() == 1) {
     if (method != "GET") return HttpReply(fd, 405, "{\"ok\":false,\"error\":\"use GET\"}");
-    std::lock_guard<std::mutex> lk(g_state_mu);
-    return HttpReply(fd, 200, g_state);
+    std::string s;
+    { std::lock_guard<std::mutex> lk(g_state_mu); s = g_state; }
+    std::error_code ec;   // 현재 적용된 프로젝트 파일 이름(.json 제외). 프로젝트 안의 name 과 다를 수 있어 에디터가 목록에서 고를 때 쓴다.
+    if (s.size() > 2 && s.back() == '}' && std::filesystem::exists(g_project, ec))
+      s.insert(s.size() - 1, ",\"file\":" + JsQuote(std::filesystem::path(g_project).stem().string()));
+    return HttpReply(fd, 200, s);
   }
   if (method != (seg[0] == "text" ? "PUT" : "POST")) return HttpReply(fd, 405, "{\"ok\":false,\"error\":\"method not allowed\"}");
 
@@ -916,6 +920,12 @@ static void HttpHandle(int fd, CefRefPtr<Client> client) {
     const auto np = std::filesystem::path(g_project).parent_path() / (body + ".json");
     if (!std::filesystem::exists(np)) return HttpReply(fd, 404, "{\"ok\":false,\"error\":\"project not found\"}");
     g_project = np.string();
+    {   // 마지막으로 적용한 프로젝트를 기록: start.sh 가 다음 시작 때 이 프로젝트로 띄운다(.run 은 bin/project 의 상위 = bin/.run)
+      std::error_code ec;
+      const auto run_dir = np.parent_path().parent_path() / ".run";
+      std::filesystem::create_directories(run_dir, ec);
+      std::ofstream(run_dir / "last-project", std::ios::binary | std::ios::trunc) << body;
+    }
     ApplyDisplay();   // 모니터를 바꿔 꽂았을 수 있으니 해상도도 다시 맞춤
     CefPostTask(TID_UI, base::BindOnce(&Client::Exec, client, std::string("cg.cmd(\"reload\",\"\",\"\")")));
     return HttpReply(fd, 200, "{\"ok\":true}");
