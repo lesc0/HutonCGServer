@@ -179,5 +179,5 @@ input:disabled,textarea:disabled{background:#0a0d15;color:#55617c}
 
 .effectpresets .preset-short{display:block;font-size:10px;line-height:1.15;color:#9fc3f3;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-/* Attributes 오른쪽: F / E-1 / E-2 / E-3 / S 버튼을 한 줄로 (줄바꿈 금지, 최소 2px 간격 + 남는 폭은 버튼 사이에 균등 분배) */
-.facebuttons{flex-wrap:nowrap;justify-content:space-between;gap:2px}.facebuttons button{flex:0 1 auto;min-width:0;padding:2px 4px;font-size:11px;text-align:center;white-space:nowrap}.faceproperties{min-width:140px}
+/* Attributes 오른쪽: F / E-1 / E-2 / E-3 / S 버튼을 한 줄로 (줄바꿈 금지, 버튼 5개를 같은 너비로 칸 끝까지 채움, 간격 2px) */
+.facebuttons{flex-wrap:nowrap;gap:2px}.facebuttons button{flex:1 1 0;min-width:0;padding:2px 1px;font-size:11px;text-align:center;white-space:nowrap}.faceproperties{min-width:140px}
