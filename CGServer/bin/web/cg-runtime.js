@@ -10,6 +10,13 @@
 //   cefQuery('ready') : 첫 화면 준비 완료 -> 인코딩 시작
 //   window.cg.cmd(name, arg, body) : HTTP 명령 진입점
 'use strict';
+
+// ---- 부드러운 스크롤 옵션 (하단 자막 끊김 실험용, 단말에서 측정해 정함) ----
+// SMOOTH_DT: 프레임 시간을 rAF 타임스탬프 그대로(들쭉날쭉) 쓰지 않고 균일한 간격으로 진행시키되 실제 시계에 서서히 맞춘다.
+// INT_STEP : crawl 을 프레임당 정수 픽셀씩 움직인다(속도가 반올림되어 기본 속도와 조금 달라짐 -> 끝나는 시각이 앞당겨질 수 있음).
+const SMOOTH_DT = true;
+const INT_STEP = false;
+let framePeriod = 1 / 60;   // rAF 간격의 느린 이동평균(초)
 const W = 1920, H = 1080;
 
 // ---------- 기본값 (model.ts make) ----------
@@ -140,7 +147,15 @@ function visual(i, time, mode, duration) {
     v.x = d === 'right' ? i.w * (1 - v.scaleX) : d === 'left' ? 0 : i.w * (1 - v.scaleX) / 2;
     v.y = d === 'down' ? i.h * (1 - v.scaleY) : d === 'up' ? 0 : i.h * (1 - v.scaleY) / 2;
   }
-  if (f === 'crawl') v.x = (d === 'right' ? 1 : -1) * q * (W + i.w) * i.speed;
+  if (f === 'crawl') {
+    let dist = q * (W + i.w) * i.speed;
+    if (INT_STEP) {   // 프레임당 정수 픽셀: step = 초당 이동거리 / fps 를 반올림, 이동량 = 지난 프레임 수 * step
+      const fps = Math.max(1, Math.round(1 / framePeriod));
+      const step = Math.max(1, Math.round((W + i.w) * i.speed / Math.max(0.1, i.duration) / fps));
+      dist = Math.round(state.elapsed * fps) * step;
+    }
+    v.x = (d === 'right' ? 1 : -1) * dist;
+  }
   if (f === 'roll') v.y = (d === 'down' ? 1 : -1) * q * (H + i.h) * i.speed;
   if (f === 'wipe' || f === 'banner' || f === 'curl') {
     v.clip = (c) => {
@@ -577,10 +592,23 @@ const canvas = document.getElementById('screen');
 const ctx = canvas.getContext('2d');
 let lastT = performance.now(), lastSec = -1;
 
+let vclock = -1;   // 가상 시계(초)
+function frameDelta(now) {
+  const real = Math.min(0.25, (now - lastT) / 1000);
+  lastT = now;
+  if (real > 0.002 && real < 0.1) framePeriod += (real - framePeriod) * 0.02;   // 간격 추정(정지/탭 전환 같은 큰 값은 제외)
+  if (!SMOOTH_DT) return real;
+  const t = now / 1000;
+  if (vclock < 0 || Math.abs(t - vclock) > 3 * framePeriod + 0.05) { vclock = t; return real; }   // 처음이거나 크게 어긋나면(멈춤) 실제 시간으로 재동기
+  const prev = vclock;
+  vclock += framePeriod;                 // 균일한 간격으로 진행
+  vclock += (t - vclock) * 0.02;         // 실제 시계에 아주 천천히 맞춤(드리프트 보정)
+  return vclock - prev;
+}
+
 function frame(now) {
   requestAnimationFrame(frame);
-  const delta = Math.min(0.25, (now - lastT) / 1000);
-  lastT = now;
+  const delta = frameDelta(now);
   if (!project) return;
 
   if (main.playing) {
