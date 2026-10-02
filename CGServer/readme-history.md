@@ -1,5 +1,19 @@
 # 작업 히스토리 (cef_mpp / zcgserver)
 
+## 2026-10-02 (이어서) — 로컬 HDMI 화면 해상도 맞춤 + 로컬 HDMI 로도 음성 재생
+
+### 로컬 화면(HDMI 2) 해상도가 안 맞던 문제 (`bin/start.sh`)
+- 증상: output=3(HDMI+UDP)에서 로컬 모니터에 화면이 잘려 나옴. 원인: HDMI-2 모니터는 1024x600 모드인데 X 화면(프레임버퍼)은 1920x1080 이고, 미리보기 창(`PreviewLoop`)은 X 화면 크기로 만들어져 왼쪽 위 1024x600 만 보였음. 기존 `xrandr` 모드 설정은 스트리머가 뜬 *뒤* 키오스크 단계에서만 해서 늦었음.
+- 수정: 스트리머 시작 *전에* 연결된 첫 출력의 권장(첫) 모드 적용 + 연결 안 된 출력 `--off` + `xrandr --fb <모드>` 로 X 화면 크기도 맞춤. 모니터가 바뀌면 그 모니터 권장 해상도로 자동 적용(`start.sh` 실행 시점에만 적용, 이후 모니터 교체는 stop/start 필요). 다른 모니터(1920x1080 전용)로 바뀐 뒤에도 미리보기 창이 1920x1080 으로 맞게 시작됨.
+- 송출은 1920x1080 고정이라 1024x600(1.71:1) 모니터에서는 가로가 약 4% 늘어남(비율 유지 레터박스는 미구현).
+
+### 로컬 HDMI 로도 음성 재생 (output=3, `cgsetup.cfg audio_out`)
+- 이전까지 음성은 AAC 로 TS(UDP)에만 들어가고 로컬 HDMI 에는 안 나갔음. `AudioMixer` 가 송출용으로 만든 같은 믹스(영상 mp4 음성 + HDMI 입력 음성)를 ALSA 재생 장치로도 내보내도록 추가(`LocalRun` 스레드: 블록 큐 → `snd_pcm_writei`, libasound dlopen, 장치 없음/에러 시 닫고 재시도, 큐는 8블록 상한으로 송출을 막지 않음).
+- 설정: `cgsetup.cfg` 의 `audio_out` = `auto`(기본, output=3 일 때 연결된 HDMI 커넥터의 소리 카드: HDMI-A-1→`rockchiphdmi0`, HDMI-A-2→`rockchiphdmi1`) / `off` / ALSA 장치명.
+- 구현 중 버그 2건: (1) 음성 설정을 `LoadSetupCfg` 이전에 읽어 항상 꺼져 있었음 → 로딩 이후로 이동. (2) printf 문자열 개행 이스케이프 오류로 빌드 실패.
+- 검증: 단말에서 `[audio] 로컬 출력 시작: plughw:CARD=rockchiphdmi1,DEV=0` 로그 확인, HDMI 캡처 반복 로그 없음. 실제 소리/지연(영상 대비)은 사용자 확인 필요.
+- 운영 메모: 단말의 `bin/cgsetup.cfg`(udp_ip=10.10.10.11)처럼 로컬 수정이 있으면 `git pull` 이 막히므로 `git stash` → `git pull` → `git stash pop` 사용.
+
 ## 2026-10-02 — HDMI 입력 음성이 무음으로 송출되던 문제 수정
 
 ### 증상
