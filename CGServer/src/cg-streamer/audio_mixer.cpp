@@ -136,8 +136,7 @@ void AudioMixer::LocalRun() {
     a.close = (decltype(a.close))dlsym(lib, "snd_pcm_close");
   }
   if (!lib || !a.open || !a.set_params || !a.writei || !a.recover || !a.close) {
-    fprintf(stderr, "[audio] libasound.so.2 를 쓸 수 없음 - 로컬 음성 출력 없음
-");
+    fprintf(stderr, "[audio] libasound.so.2 를 쓸 수 없음 - 로컬 음성 출력 없음\n");
     if (lib) dlclose(lib);
     return;
   }
@@ -148,14 +147,12 @@ void AudioMixer::LocalRun() {
     if (!h) {   // 모니터가 아직 안 붙었거나 장치가 준비 안 되면 재시도
       if (a.open(&h, local_dev_.c_str(), 0, 0) < 0 || a.set_params(h, 2, 3, 2, kRate, 1, 150000) < 0) {
         if (h) { a.close(h); h = nullptr; }
-        if (!warned) { fprintf(stderr, "[audio] 로컬 출력 열기 실패 (%s) - 재시도
-", local_dev_.c_str()); warned = true; }
+        if (!warned) { fprintf(stderr, "[audio] 로컬 출력 열기 실패 (%s) - 재시도\n", local_dev_.c_str()); warned = true; }
         for (int i = 0; i < 10 && !stop_; i++) std::this_thread::sleep_for(std::chrono::milliseconds(100));
         continue;
       }
       warned = false;
-      printf("[audio] 로컬 출력 시작: %s
-", local_dev_.c_str());
+      printf("[audio] 로컬 출력 시작: %s\n", local_dev_.c_str());
       const std::vector<int16_t> silence(kBlock * 2, 0);   // 시작 직후 언더런 방지용 선행 무음 2블록
       for (int i = 0; i < 2; i++) a.writei(h, silence.data(), kBlock);
     }
