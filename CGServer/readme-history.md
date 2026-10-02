@@ -153,6 +153,9 @@
 - **에디터 키오스크**(기본 `editor_kiosk=off`, `kiosk.sh start|stop|restart|restart-if-running`): 에디터는 데스크탑 브라우저로 직접 접속하는 것을 기본으로 함. 켤 경우: 프로필 폴더를 사용자별(`/tmp/cg-editor-kiosk-<user>`)로(root 가 만든 폴더 때문에 pi 계정에서 안 뜨던 문제), pid 파일 대신 프로필 폴더(`--user-data-dir`) 기준으로 찾고 종료(브라우저 래퍼가 실제 Chromium 을 자식으로 띄워 pid 가 안 맞음), `setsid` 로 ssh 세션과 분리, 작은 모니터(1024x600)용 `editor_scale=auto` 배율과 `--lang=ko-KR`/번역 끔 추가(화면에서 효과는 확인 못 함: Chromium 은 GPU 렌더링이라 `x11grab` 캡처가 오래된 화면을 줌).
 - 설정(`cgsetup.cfg`): `editor_display`(기본 HDMI-1), `output_display`(기본 HDMI-2), `editor_scale`, `editor_kiosk`, `realtime`.
 - 확인 사항: 단말에서 모니터 포트를 여러 번 바꿔 꽂으며(HDMI-1 1920x1080 + HDMI-2 1024x600 두 대 연결 포함) 배치가 자동으로 다시 잡히는 것 확인. 재부팅 후에는 엔진/에디터가 자동으로 시작되지 않아 `start.sh` 를 직접 실행해야 함(부팅 자동 시작 설정 없음).
+- **송출 모니터만 연결했을 때 위쪽에 데스크탑이 보이고, HDMI-1 을 연결하면 HDMI-1 로 송출되던 문제**(모니터를 여러 번 바꿔 꽂으며 확인): 정식 창으로 바꾼 뒤(14번) 창 관리자가 일반 창을 패널 아래(작업 영역)로 밀어 `+0+27` 에 두어 위쪽 27px 에 데스크탑이 보이고 아래가 잘렸음. 전체화면(`_NET_WM_STATE_FULLSCREEN`)으로 바꾸니 두 모니터일 때 창 관리자가 **HDMI-1(첫 모니터)** 에 전체화면을 띄워 HDMI-1 로 송출됨. 최종: 창 종류를 **`_NET_WM_WINDOW_TYPE_DOCK`** + `_NET_WM_STATE_ABOVE/STICKY/SKIP_TASKBAR/SKIP_PAGER`, 장식 없음(`_MOTIF_WM_HINTS`) -> 작업 영역 제한 없이 요청한 모니터 위치/크기 그대로 배치.
+- **display.sh 버그 3건**(모니터가 바뀔 때 드러남): (1) 권장 모드를 "모드 목록의 첫 줄"로 골랐는데 4:3 모니터 등은 첫 줄이 권장이 아님 -> 모드 줄의 `+` 표시(권장) 우선, 없으면 첫 줄. (2) 그 awk 정규식 `/+/` 가 Debian 의 mawk 에서 컴파일되지 않아(`regular expression compile failed`) 권장 모드가 비어 기본값 1920x1080 으로 `xrandr --mode` 를 호출해 실패(두 출력이 `0,0` 에 겹쳐 두 모니터에 동시에 송출됨) -> `[+]`. (3) `xrandr` 로 모드를 바꾼 직후 바로 읽어 바뀌기 전 값이 기록됨 -> 실제 반영될 때까지(최대 4초) 기다린 뒤 기록.
+- **연결 변경 후 X 서버가 뒤늦게 배치를 덮어쓰는 문제**: 모니터를 꽂은 뒤 X 가 한참 뒤에 두 출력을 `0,0` 에 겹쳐 놓아 첫 계산 결과가 무효가 됨 -> `DisplayWatch` 가 감지 후 3초, 8초 뒤에 배치를 한 번씩 더 확인(이미 맞으면 아무것도 안 바뀜).
 - 참고: `src/cg-editor/AGENTS.md`, `CLAUDE.md` 는 사용자가 직접 삭제한 것(`38e9714` 에 삭제가 함께 올라감). 실수로 보고 `8b2f6a4` 에서 복원했다가 다시 삭제함. 앞으로는 `git add` 에 파일을 명시.
 
 ### 14) 엔진을 올리면 마우스 클릭이 안 되던 문제: 미리보기 창이 원인(override_redirect)
