@@ -43,6 +43,7 @@ void HdmiRxSource::AudioRun() {
     int (*set_params)(void*, int, int, unsigned, unsigned, int, unsigned);
     long (*readi)(void*, void*, unsigned long);
     int (*recover)(void*, int, int);
+    int (*start)(void*);
     int (*close)(void*);
   } a{};
   void* lib = dlopen("libasound.so.2", RTLD_NOW);
@@ -51,9 +52,10 @@ void HdmiRxSource::AudioRun() {
     a.set_params = (decltype(a.set_params))dlsym(lib, "snd_pcm_set_params");
     a.readi = (decltype(a.readi))dlsym(lib, "snd_pcm_readi");
     a.recover = (decltype(a.recover))dlsym(lib, "snd_pcm_recover");
+    a.start = (decltype(a.start))dlsym(lib, "snd_pcm_start");
     a.close = (decltype(a.close))dlsym(lib, "snd_pcm_close");
   }
-  if (!lib || !a.open || !a.set_params || !a.readi || !a.recover || !a.close) {
+  if (!lib || !a.open || !a.set_params || !a.readi || !a.recover || !a.start || !a.close) {
     fprintf(stderr, "[hdmirx] libasound.so.2 를 쓸 수 없음 - HDMI 음성 없음\n");
     if (lib) dlclose(lib);
     return;
@@ -75,12 +77,19 @@ void HdmiRxSource::AudioRun() {
         for (int i = 0; i < 10 && !stop_; i++) std::this_thread::sleep_for(std::chrono::milliseconds(100));
         continue;
       }
+      // 이 보드(rk_hdmirx)는 readi 의 자동 시작이 EIO 로 실패해서 명시적으로 start 해야 한다.
+      if (a.start(pcm_h) < 0) {
+        a.close(pcm_h);
+        pcm_h = nullptr;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        continue;
+      }
       warned = false;
       printf("[hdmirx] 음성 캡처 시작: %s\n", kDev);
     }
     const long n = a.readi(pcm_h, raw.data(), kChunk);
-    if (n < 0) {   // overrun/신호 끊김: 복구 안 되면 닫고 다시 연다
-      if (a.recover(pcm_h, (int)n, 1) < 0) {
+    if (n < 0) {   // overrun/신호 끊김: 복구 후 다시 start, 안 되면 닫고 다시 연다
+      if (a.recover(pcm_h, (int)n, 1) < 0 || a.start(pcm_h) < 0) {
         a.close(pcm_h);
         pcm_h = nullptr;
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
