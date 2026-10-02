@@ -151,6 +151,18 @@
 - 이후 "HDMI-1 이 데스크톱 화면": 키오스크 Chromium 이 ssh 세션 안에서 띄워져 세션이 끝날 때 같이 사라진 것(창 목록에 `Huton CG Editor` 없음). `setsid nohup` 으로 세션과 분리해 다시 띄우고 별도 ssh 접속에서 30초 뒤에도 창이 `1024x600+0+0` 에 있음을 확인. `start.sh` 의 Chromium 실행에도 `setsid` 추가. 주의: `pgrep chromium` 은 프로세스 이름이 `chrome` 이라 0 으로 나오므로 확인은 X 창 목록(`xwininfo -root -tree | grep 'Huton CG Editor'`)으로.
 - 참고: `src/cg-editor/AGENTS.md`, `CLAUDE.md` 는 사용자가 직접 삭제한 것(이 커밋 `38e9714` 에 삭제가 함께 올라감). 이를 실수로 보고 `8b2f6a4` 에서 복원했다가 다시 삭제함. 앞으로는 `git add` 에 파일을 명시.
 
+### 14) 엔진을 올리면 마우스 클릭이 안 되던 문제: 미리보기 창이 원인(override_redirect)
+
+- 증상: `start.sh` 로 엔진을 올리면(output=3, 로컬 미리보기 켜짐) 데스크탑/브라우저에서 마우스 이동은 되는데 클릭이 안 됨. 엔진을 내리면 정상.
+- 원인 분리(단말에서 하나씩 빼며 사용자 확인 + 서버 쪽 측정):
+  - 정상: 엔진만(output=2, 미리보기 없음), 엔진 없이 빈 창만, 엔진 옆에서 별도 프로세스(python)로 만든 같은 속성의 창, X 연결만 열었다 닫는 경우.
+  - 안 됨: 엔진 안에서 `override_redirect` 창을 만든 모든 변형(맨 아래로 내림, 입력 안 받음, 그리기 생략, 감시 스레드 끔, 시작 40초 뒤 생성, 창 만든 뒤 연결 닫기, display.sh 생략). 즉 창을 그리는 내용/RGA/스케줄링/감시 스레드/마우스 장치와 무관.
+  - 서버 쪽 측정은 모두 정상이라 오해하기 쉬웠음: 실제 클릭이 시험 창에 도착, 가짜 클릭이 패널 메뉴를 엶, X 왕복 지연 최대 10ms, 화면 갱신(깜박이는 창) 정상, 메모리/CPU 압박 없음, 합성 매니저 꺼짐.
+- 해결: 미리보기 창을 **창 관리자(xfwm4)가 관리하는 정식 창**으로 변경(`override_redirect` 제거). 위치/크기는 `XSetWMNormalHints`(USPosition|USSize)로 송출 모니터 영역을 요청하고, 기본은 `_MOTIF_WM_HINTS`(장식 없음) + `_NET_WM_STATE_ABOVE/SKIP_TASKBAR/SKIP_PAGER` 로 제목 표시줄 없는 창. 창 관리자가 정한 실제 크기에 맞춰 그림. `CG_PV_STYLE=title`(제목 표시줄 있음)/`override`(예전 방식, 문제 재현용)로 바꿀 수 있음.
+- 결과: 엔진 + 미리보기(HDMI-2 1024x600+1920+0)가 떠 있어도 마우스 클릭 정상(사용자 확인 + 패널 메뉴 클릭 측정).
+- 부수 변경: `cgsetup.cfg` `editor_kiosk=off`(기본: 에디터 키오스크를 띄우지 않고 데스크탑 브라우저로 접속), `realtime=off`(SCHED_FIFO 기본 꺼짐), `display.sh` 는 **송출 모니터(HDMI-2)만 제어**하고 HDMI-1 은 건드리지 않음(송출 모니터가 없으면 미리보기 창도 안 띄움), 모니터 연결 변경 감시는 EDID 포함. 키오스크 종료는 pid 파일 대신 프로필 폴더 기준(`kiosk.sh`).
+- 교훈: (1) 단말 ssh 명령 안에 `pkill -f "패턴"` 을 쓰면 그 명령줄 자신(셸)에 매칭되어 자기 자신을 종료시킴 -> `[p]attern` 형태로 쓰거나 별도 스크립트로. (2) 같은 패턴 문제로 `start.sh` 의 `pgrep -f "cg-streamer --run"` 도 오인함. (3) 에디터 Chromium 은 GPU 렌더링이라 `x11grab` 캡처가 오래된 화면을 줄 수 있어 화면 캡처로 판단하면 안 됨.
+
 ## 2026-10-01 (이어서 3) — 업스트림 병합, start.sh 기본 production, 패널 배치, stop.sh 보강
 
 ### git 업스트림 받기 (충돌 해결)
