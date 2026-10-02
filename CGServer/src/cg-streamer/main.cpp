@@ -811,6 +811,12 @@ static int PreviewRun() {
 static void PreviewLoop() {
   pthread_setname_np(pthread_self(), "cg-preview");
   SetRealtime("cg-preview", 49);
+  // CEF 가 화면을 준비(g_ready)할 때까지 기다린 뒤 창을 만든다. CEF/Chromium 이 X 를 초기화하는 중에 같은 프로세스에서 창을 만들면 (단말에서 확인) 다른 프로그램의 마우스 클릭이 안 먹는 문제가 있었다.
+  {
+    const char* d = getenv("CG_PV_DELAY");   // 시험용: 준비 후 추가로 기다릴 초
+    while (!g_quit && !g_ready) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    for (int i = 0, n = (d ? atoi(d) : 2) * 10; i < n && !g_quit; i++) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
   for (;;) {
     g_preview_reset = false;
     const int r = PreviewRun();
