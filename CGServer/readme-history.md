@@ -167,6 +167,20 @@
 - 부수 변경: `cgsetup.cfg` `editor_kiosk=off`(기본: 에디터 키오스크를 띄우지 않고 데스크탑 브라우저로 접속), `realtime=off`(SCHED_FIFO 기본 꺼짐), `display.sh` 는 **송출 모니터(HDMI-2)만 제어**하고 HDMI-1 은 건드리지 않음(송출 모니터가 없으면 미리보기 창도 안 띄움), 모니터 연결 변경 감시는 EDID 포함. 키오스크 종료는 pid 파일 대신 프로필 폴더 기준(`kiosk.sh`).
 - 교훈: (1) 단말 ssh 명령 안에 `pkill -f "패턴"` 을 쓰면 그 명령줄 자신(셸)에 매칭되어 자기 자신을 종료시킴 -> `[p]attern` 형태로 쓰거나 별도 스크립트로. (2) 같은 패턴 문제로 `start.sh` 의 `pgrep -f "cg-streamer --run"` 도 오인함. (3) 에디터 Chromium 은 GPU 렌더링이라 `x11grab` 캡처가 오래된 화면을 줄 수 있어 화면 캡처로 판단하면 안 됨.
 
+### 15) 데비안 데스크탑에서 한글 입력 (fcitx5 + hangul, 에디터 포함)
+
+- 요청: 이 보드(Debian 11 XFCE)에서 한글 입력, 에디터에서도 한글 입력. 시스템 로케일은 바꾸지 않음(`LANG=C.UTF-8` 유지).
+- 시작 상태: 입력기는 `ibus`(중국어 병음만)뿐, 한글 글꼴 없음(중국어 WenQuanYi 만). 세션은 `GTK_IM_MODULE=ibus` 로 시작되어 있었음.
+- 설정: `fcitx5`, `fcitx5-hangul`, GTK2/GTK3/Qt5 연동, 설정 도구, `fonts-nanum` 설치 -> `im-config -n fcitx5`(`~/.xinputrc`) -> `~/.config/fcitx5/{profile,config,conf/hangul.conf}`(영문 us + 한글 hangul, 시작은 영문, 전환 키 한/영 키·Shift+Space·Ctrl+Space, 두벌식) -> 자동 시작 항목 -> Chromium 런처에 입력기 환경변수 직접 지정.
+- 한 번에 재현하는 스크립트 `bin/setup-hangul.sh`(여러 번 실행해도 안전)와 설명서(`readme-env.md` "한글 입력" 절)를 추가.
+- 에디터: 에디터는 브라우저(Chromium) 안의 웹 앱이라 브라우저에서 한글이 되면 자막 입력칸/캔버스 글자 편집 모두 됨. `bin/kiosk.sh`(에디터 키오스크)는 입력기 환경변수와 데스크탑 세션의 D-Bus 주소를 직접 넣어 줌(ssh 로 `start.sh` 를 실행하면 이 값이 없어 한글이 안 됨).
+- 진단 과정과 함정:
+  - 처음에 "한글이 안 된다"고 했던 것은 설정이 아니라 **이미 떠 있던 Chromium(예전 ibus 환경)에 새 창이 붙어서**였음. Chromium 은 같은 프로필의 기존 프로세스에 붙기 때문에 환경변수를 바꿔도 소용없음 -> 열린 창을 모두 닫고 새 환경의 런처로 열어야 함.
+  - "GTK 를 안 쓰는 빌드"로 오판할 뻔함: Chromium 은 GTK3 를 실행 중에 불러오므로 `ldd` 에 안 보임. `/proc/<pid>/maps` 에서 `libgtk-3.so`, `im-fcitx5.so` 로 확인.
+  - ssh 셸에는 D-Bus 세션 주소가 없어 `fcitx5-remote` 가 실패 -> `xfce4-session` 프로세스 환경에서 가져옴. fcitx5 5.0.5 의 `fcitx5-remote` 에는 `-n` 이 없음.
+- 검증: 새 환경(`GTK_IM_MODULE=fcitx` 등 + 별도 프로필)으로 띄운 에디터/시험 창에서 한글 입력 확인(사용자 확인). XIM 서버 `@server=fcitx`, fcitx5 가 `hangul`/`xim`/`xcb` 애드온 로드.
+- 남은 일: 지금 떠 있는 데스크탑 세션은 ibus 환경이므로 **로그아웃 후 다시 로그인**(또는 재부팅)해야 어떤 방법으로 열어도 한글이 됨. 그 전에는 바탕화면의 Chromium 아이콘(수정한 런처)으로, 열린 Chromium 을 모두 닫은 뒤 열기.
+
 ## 2026-10-01 (이어서 3) — 업스트림 병합, start.sh 기본 production, 패널 배치, stop.sh 보강
 
 ### git 업스트림 받기 (충돌 해결)

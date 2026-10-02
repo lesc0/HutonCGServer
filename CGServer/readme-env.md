@@ -201,6 +201,38 @@ CM3588 의 HDMI IN(`/dev/video20`, rk_hdmirx)을 영상 자리에 합성한다.
   `EncodeLoop`을 아예 안 타서 **UI(자막·로고·패널)만 보이고 mp4/HDMI 영상은 비어 있다** — 레이아웃/자막
   확인용으로만 쓸 것.
 
+## 한글 입력 (Debian 11 + XFCE, fcitx5)
+
+이 보드의 데스크탑(XFCE)에서 한글을 입력하기 위한 설정. 에디터(cg-editor)는 브라우저(Chromium)에서 동작하므로 **브라우저에서 한글이 입력**되면 자막 입력칸과 캔버스 글자 편집 모두 된다. 시스템 로케일(`LANG=C.UTF-8`)은 바꾸지 않는다.
+
+### 설정 (한 번만)
+```
+cd /root/work/github.cgserver/CGServer/bin
+./setup-hangul.sh        # pi 계정으로 실행, sudo 필요(패키지 설치). 여러 번 실행해도 안전
+```
+스크립트가 하는 일:
+1. 패키지 설치: `fcitx5 fcitx5-hangul fcitx5-frontend-gtk2/gtk3/qt5 fcitx5-config-qt fcitx5-module-xorg im-config fonts-nanum`
+2. `im-config -n fcitx5` — 로그인할 때 `GTK_IM_MODULE=fcitx`, `QT_IM_MODULE=fcitx`, `XMODIFIERS=@im=fcitx` 환경변수와 fcitx5 자동 시작(`~/.xinputrc`)
+3. `~/.config/fcitx5/{profile,config,conf/hangul.conf}` — 입력 방식(영문 us + 한글 hangul, 시작은 영문), 전환 키, 두벌식
+4. `~/.config/autostart/fcitx5.desktop` — 로그인 때 `fcitx5 -d` 자동 시작(이미 떠 있으면 두 번째는 종료)
+5. **Chromium 런처**(바탕화면 아이콘 + 응용 프로그램 메뉴)를 `env GTK_IM_MODULE=fcitx QT_IM_MODULE=fcitx XMODIFIERS=@im=fcitx /usr/bin/chromium-browser %U` 로 교체(바탕화면 아이콘의 원본은 `~/.config/cg-backup/Desktop-chromium-browser.desktop.orig` 에 보관)
+6. 지금 세션에서도 fcitx5 시작
+
+### 사용
+- 한/영 전환: 키보드의 **한/영 키**, **Shift+Space**, **Ctrl+Space** (시작은 영문). 전환 키를 바꾸려면 `~/.config/fcitx5/config` 의 `[Hotkey/TriggerKeys]` 수정 후 `fcitx5 -r` (또는 `fcitx5-configtool`).
+- 브라우저는 **먼저 열려 있는 Chromium 창을 모두 닫고** 바탕화면의 Chromium 아이콘으로 연다. 이미 떠 있는 Chromium 에 붙으면 예전(ibus) 입력기 환경이라 한글이 안 된다.
+- **로그아웃 후 다시 로그인**(또는 재부팅)하면 세션 전체가 fcitx5 환경이 되어 어떤 방법으로 열어도 한글이 된다.
+- 에디터 키오스크(`start.sh`, `editor_kiosk=on`)는 `bin/kiosk.sh` 가 입력기 환경변수와 데스크탑 세션의 D-Bus 주소를 직접 넣어 준다.
+- 에디터를 **다른 PC의 브라우저**로 쓰면 그 PC의 한글 입력기가 쓰이므로 이 설정과 무관하다.
+
+### 알아둘 점 / 문제 해결
+- **현재 세션은 처음에 `GTK_IM_MODULE=ibus` 로 시작**됐다(ibus 가 설치되어 있어 im-config 가 자동으로 ibus 선택). `im-config -n fcitx5` 로 바꿔도 이미 떠 있는 세션과 프로그램에는 적용되지 않는다 -> 재로그인.
+- Chromium 은 GTK3 를 **실행 중에 불러온다**(`ldd` 에는 안 보임). 불러온 모듈은 `/proc/<pid>/maps` 의 `libgtk-3.so`, `im-fcitx5.so` 로 확인.
+- ssh 로 들어온 셸에는 데스크탑의 D-Bus 주소가 없어 `fcitx5-remote`/브라우저의 입력기 연결이 안 된다. 데스크탑 세션의 주소는 `xfce4-session` 프로세스 환경(`/proc/<pid>/environ`)의 `DBUS_SESSION_BUS_ADDRESS`.
+- 이 버전(fcitx5 5.0.5)의 `fcitx5-remote` 에는 `-n` 옵션이 없다. 전환 확인은 `fcitx5-remote -s hangul`/`-s keyboard-us`.
+- 진단: `fcitx5-diagnose`. X 입력 서버 등록 확인: `xprop -root XIM_SERVERS` 가 `@server=fcitx`.
+- 되돌리기: `im-config -n ibus`(또는 `auto`), `~/.config/autostart/fcitx5.desktop` 삭제, 바탕화면 런처는 백업 원본으로 복원.
+
 ## 알아둘 점
 - 실기 확인(CM3588): 1080p60 송출, 색상(BGRA) 정상, UDP 페이지 제어 정상, 영상 합성 정상, `--preview` 로컬 미리보기 정상(UDP 송출과 동시).
 - **UI 지터 버퍼**: CEF와 인코더의 60Hz 박자 차이로 생기는 끊김(같은 그림 2번/1장 건너뜀)을 없애기 위해
