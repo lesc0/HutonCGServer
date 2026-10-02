@@ -107,6 +107,7 @@ static std::string g_page = "player.html";   // --page=이름.html : 진단/테�
 // 입력(HDMI RX)은 자동 감지이므로 설정 대상 아님. --setup= 로 경로 변경 가능, 커맨드라인 인자가 항상 우선.
 static std::string g_setup_cfg = "cgsetup.cfg";
 static int g_output_type = 2;
+static std::string g_audio_out = "auto";   // 로컬 음성 출력: auto(output=3 일 때 연결된 HDMI 소리 카드) / off / ALSA 장치명
 static std::string g_udp_ip = "127.0.0.1";
 static int g_udp_port = 1234;
 
@@ -205,6 +206,7 @@ static void LoadSetupCfg(const std::string& path) {
     if (k == "output") g_output_type = atoi(v.c_str());
     else if (k == "udp_ip") g_udp_ip = v;
     else if (k == "udp_port") g_udp_port = atoi(v.c_str());
+    else if (k == "audio_out") g_audio_out = v;
     else if (k == "fps") g_fps = std::max(1, atoi(v.c_str()));
   }
 }
@@ -952,6 +954,18 @@ static bool AcquireRunLock() {
 }
 
 int main(int argc, char* argv[]) {
+  if (g_output_type == 3 && g_audio_out != "off") {   // HDMI+UDP 동시: 송출과 같은 음성을 로컬 HDMI 로도 재생
+    std::string dev = g_audio_out;
+    if (dev == "auto" || dev.empty()) {   // 연결된 HDMI 커넥터 -> 소리 카드 (HDMI-A-1=rockchiphdmi0, HDMI-A-2=rockchiphdmi1)
+      dev.clear();
+      for (int i = 1; i <= 2 && dev.empty(); i++) {
+        std::ifstream st("/sys/class/drm/card0-HDMI-A-" + std::to_string(i) + "/status");
+        std::string s;
+        if (st >> s && s == "connected") dev = "plughw:CARD=rockchiphdmi" + std::to_string(i - 1) + ",DEV=0";
+      }
+    }
+    if (!dev.empty()) g_audio.SetLocalOut(dev);
+  }
   g_video.SetAudio(&g_audio);
   g_hdmi.SetAudio(&g_audio);
   CefMainArgs main_args(argc, argv);
