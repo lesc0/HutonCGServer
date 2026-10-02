@@ -46,7 +46,7 @@ else
 fi
 # 에디터 모니터의 위치/크기가 바뀌었고 키오스크가 떠 있으면 새 위치로 다시 띄운다(모니터를 뽑았다 꽂은 경우). 처음 시작할 때는 start.sh 가 띄우므로 건드리지 않음.
 NEW_EDITOR_GEOM=$(cat "$RUN/display-editor.geom" 2>/dev/null)
-if [ -n "$OLD_EDITOR_GEOM" ] && [ "$OLD_EDITOR_GEOM" != "$NEW_EDITOR_GEOM" ] && [ -f "$RUN/kiosk-chromium.pid" ] && kill -0 "$(cat "$RUN/kiosk-chromium.pid")" 2>/dev/null; then
-  ( setsid bash "$HERE/kiosk.sh" restart >/dev/null 2>&1 & )
+if [ -n "$OLD_EDITOR_GEOM" ] && [ "$OLD_EDITOR_GEOM" != "$NEW_EDITOR_GEOM" ]; then
+  ( setsid bash "$HERE/kiosk.sh" restart-if-running >/dev/null 2>&1 & )
 fi
 exit 0

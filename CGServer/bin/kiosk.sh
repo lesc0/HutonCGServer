@@ -12,14 +12,15 @@ KIOSK_PROFILE=/tmp/cg-editor-kiosk-$(id -un)   # 사용자별 폴더(root 로 �
 PIDF=.run/kiosk-chromium.pid
 PORTF=.run/kiosk.port
 
-alive() { [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; }
+# 키오스크 Chromium 은 프로필 폴더(--user-data-dir)로 찾는다. 브라우저 실행 래퍼가 실제 Chromium 을 자식으로 띄워서 $! 로 얻은 pid 는 믿을 수 없다
+# (옛 pid 로만 종료하면 옛 창이 남고, 새로 띄운 것은 같은 프로필의 기존 창에 넘겨주고 바로 끝나 설정이 안 바뀐다). [-] 는 이 스크립트 자신에 매칭되지 않게 하는 용도.
+PAT="[-]-user-data-dir=$KIOSK_PROFILE( |$)"
+alive() { pgrep -f -- "$PAT" >/dev/null 2>&1; }
 stop() {
-  if [ -f "$PIDF" ]; then
-    pid=$(cat "$PIDF")
-    pkill -P "$pid" 2>/dev/null
-    kill "$pid" 2>/dev/null
-    rm -f "$PIDF"
-  fi
+  pkill -f -- "$PAT" 2>/dev/null
+  for _ in 1 2 3 4 5 6 7 8 9 10; do alive || break; sleep 0.3; done
+  alive && pkill -9 -f -- "$PAT" 2>/dev/null
+  rm -f "$PIDF"
 }
 start() {
   local port=${1:-}
@@ -52,5 +53,6 @@ case "${1:-}" in
   start) start "${2:-}" ;;
   stop) stop ;;
   restart) stop; sleep 1; start ;;
-  *) echo "사용법: $0 start [포트] | stop | restart"; exit 2 ;;
+  restart-if-running) alive && { stop; sleep 1; start; } ;;
+  *) echo "사용법: $0 start [포트] | stop | restart | restart-if-running"; exit 2 ;;
 esac

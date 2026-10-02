@@ -4,12 +4,7 @@ set -u
 cd "$(dirname "$(readlink -f "$0")")"
 CHROMIUM_PIDF=.run/kiosk-chromium.pid
 
-if [ -f "$CHROMIUM_PIDF" ]; then
-  pid=$(cat "$CHROMIUM_PIDF")
-  pkill -P "$pid" 2>/dev/null
-  kill "$pid" 2>/dev/null
-  rm -f "$CHROMIUM_PIDF"
-fi
+bash ./kiosk.sh stop   # 프로필 기준으로 키오스크 Chromium 전체 종료
 
 if pgrep -f "cg-streamer --run" >/dev/null; then
   curl -s -X POST http://127.0.0.1:5555/quit --max-time 3 >/dev/null
