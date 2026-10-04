@@ -773,7 +773,28 @@ static bool ReadOutputGeom(int& x, int& y, int& w, int& h) {
   double draw_gap_max_ms = 0;                 // 진단용: 그린 시각 사이 최대 간격(ms)
   auto stat_t0 = clk::now();
   printf("[preview] %dx%d 창 시작 (%s)\n", sw, sh, shm_ok ? "XShm 더블버퍼" : "XPutImage");
-  while (!g_quit && !g_preview_reset) {
+  while (!g_quit) {
+    if (g_preview_reset) {
+      // 송출 영역의 크기가 그대로이고 위치만 바뀐 경우(다른 모니터를 뽑거나 꽂아 배치가 달라짐)는 창을 부수지 않고 그 자리에서 옮긴다
+      // (창을 다시 만들면 그 사이 화면이 비어 깜빡임). 크기가 달라졌거나 모니터가 없어졌으면 예전처럼 창을 다시 만든다.
+      int nx = 0, ny = 0, nw = 0, nh = 0;
+      if (ReadOutputGeom(nx, ny, nw, nh) && nw == g_preview_w && nh == g_preview_h) {
+        if (nx != g_preview_x || ny != g_preview_y) {
+          XSizeHints nsz{};
+          nsz.flags = USPosition | USSize | PPosition | PSize;
+          nsz.x = nx; nsz.y = ny; nsz.width = sw; nsz.height = sh;
+          XSetWMNormalHints(dpy, win, &nsz);
+          XMoveWindow(dpy, win, nx, ny);
+          XFlush(dpy);
+          printf("[preview] 창 위치만 이동 +%d+%d -> +%d+%d (다시 만들지 않음)\n", (int)g_preview_x, (int)g_preview_y, nx, ny);
+          g_preview_x = nx;
+          g_preview_y = ny;
+        }
+        g_preview_reset = false;
+      } else {
+        break;
+      }
+    }
     {   // 인코더가 새 프레임을 만들 때까지 대기(종료/재생성 확인용으로 50ms 마다 깨어남)
       std::unique_lock<std::mutex> lk(g_pv_mu);
       g_pv_cv.wait_for(lk, std::chrono::milliseconds(50), [&] { return g_pv_seq != seen || g_quit || g_preview_reset; });
