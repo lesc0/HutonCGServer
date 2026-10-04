@@ -32,6 +32,7 @@ class DrmOut {
     uint32_t handle = 0, id = 0;
   };
   bool Lease(const std::string& output, int& rc);
+  bool OpenDirect(const std::string& output, int& rc);   // X 가 없을 때: /dev/dri/card0 을 직접 열어 DRM master 가 됨
   bool Setup();
   bool AllocFbs();
 
@@ -44,6 +45,8 @@ class DrmOut {
   uint8_t mode_[68] = {};             // drmModeModeInfo (포함 헤더를 .cpp 로 숨기려고 바이트 배열로 보관)
   Fb fbs_[2];
   int cur_ = 0;
+  bool direct_ = false;               // lease 없이 직접 연 DRM fd
+  int crtc_idx_ = 0;                  // 리소스 목록에서의 CRTC 번호(plane possible_crtcs 비트)
   bool first_ = true;
 };
 #endif
