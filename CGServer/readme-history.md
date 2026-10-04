@@ -1,5 +1,38 @@
 # 작업 히스토리 (cef_mpp / zcgserver)
 
+## 2026-10-04
+
+### 1) 송출 모니터(HDMI-2)에 X 창 없이 DRM/KMS 로 직접 출력 (CG_DRM_OUT 빌드)
+
+#### 배경
+- 미리보기를 X 창(xfwm4 가 관리)으로 띄우면 창 배치(DOCK)·마우스 클릭 문제가 반복됨 → HDMI-2 에는 입력이 필요 없으니 X 를 거치지 않고 DRM 으로 직접 쓰기로 함.
+- 기존 X 창 경로는 그대로 두고, **컴파일 define `CG_DRM_OUT`** 으로만 켠다: `CG_DRM_OUT=1 ./build.sh install`(cmake `-DENABLE_DRM_OUTPUT=ON`). define 이 없으면 기존 동작 그대로. `build.sh` 는 항상 `-DENABLE_DRM_OUTPUT=ON/OFF` 를 명시(cmake 캐시에 ON 이 남지 않게).
+
+#### 구현
+- 새 파일 `src/cg-streamer/drm_out.{h,cpp}`: libdrm atomic modeset(권장 모드) + NV12 plane 에 FB 2장을 번갈아 flip(블로킹 commit, vblank 동기). 인코더가 만든 NV12 를 RGA 로 모드 크기의 dmabuf 에 복사(`MppH264Encoder::ExportPreviewNv12`, define 안에서만 존재).
+- `main.cpp`: `DrmPreviewRun()`(define 일 때 `PreviewLoop` 이 `PreviewRun` 대신 호출), `DrmConnSig()`(HDMI-A-N 의 status+EDID 해시, 모니터 연결 변경 시 `ApplyDisplay` 가 출력을 다시 엶). define 일 때 `ApplyDisplay` 는 display.sh 를 부르지 않음(X 가 HDMI-2 를 켜 버리면 안 됨).
+- 열기 순서: ① X 가 있으면 RandR **lease**(xcb `xcb_randr_create_lease`)로 HDMI-2 의 connector+CRTC 를 빌려 별도 DRM fd 를 얻음 ② X 가 없으면(xcb 연결 실패) `/dev/dri/card0` 을 **직접 열어 DRM master** 가 되고 HDMI-A-N connector/CRTC 를 고름.
+
+#### 조사: X 위에서 lease 가 안 되는 이유 (결국 쓰지 않음)
+- 증상: `RandR lease 생성 실패 (error_code=8)`, 커널 `drm.debug=0x80` 로그에 `lease validation failed`(EINVAL). 커널은 lease 에 CRTC·connector·**plane** 이 모두 있어야 허용.
+- Xorg 1.20.11 modesetting(`drmmode_create_lease`)은 `Option "Atomic" "true"` 일 때만 plane 을 넣음 → `20-modesetting.conf` 에 추가(백업 `.bak-atomic`).
+- 그래도 안 됨: 커널이 프로세스 이름이 `X` 로 시작하면 atomic 을 거부(`broken atomic modeset userspace detected, disabling atomic`). Xorg 를 `atomic-xorg`(심볼릭 링크) 이름으로 띄우도록 `/usr/bin/X` 를 고쳤더니(`Xorg.wrap` 분기 포함) 커널 경고는 사라졌지만 lease 는 여전히 plane 없이 2개 object 만 넘김(gdb 로 `drmModeCreateLease` count=2 확인, flip 도 레거시 `PAGE_FLIP`). 이 Xorg 빌드는 atomic 옵션이 실제로 동작하지 않는 것으로 보임 → lease 방식 포기.
+- 단말에 남은 변경(필요 없으면 백업으로 복원 후 lightdm 재시작): `/etc/X11/xorg.conf.d/20-modesetting.conf`(Atomic 추가), `/usr/bin/X`(백업 `/usr/bin/X.bak-atomic`), `/usr/lib/xorg/atomic-xorg` 링크.
+
+#### 채택: X 를 내리고 DRM master 직접 사용
+- `sudo systemctl stop lightdm` 후 실행. CEF 는 X 가 없으면 `Missing X server or $DISPLAY` 로 죽으므로 `--cef:ozone-platform=headless` 필요.
+- headless 에서 `--gpu --cef:use-angle=gles-egl` 도 뜨지만 `paint=100/s` 로 과공급 + `drop` 이 계속 늘어 **소프트웨어 렌더(옵션 없음)** 사용: `paint=60/s drop=0 enc=60fps`.
+- `bin/start.sh`: X(`Xorg`/`atomic-xorg`) 프로세스가 없으면 display.sh 를 건너뛰고 `--cef:ozone-platform=headless` 로 실행(`CG_NO_X=1/0` 으로 강제 가능).
+
+#### 결과 (단말 CM3588)
+- `[drm] DRM 직접 열기: HDMI-A-2 connector 495 crtc 131` → 1024x600@60, plane 115(NV12) 로 `drm flip=61/s`, `enc=60fps`, 커널 에러 없음. (모니터 화면 육안 확인은 사용자 몫)
+- 에디터(cg-editor)는 웹 서버라 PC 브라우저로 `http://10.10.10.56:8080` 접속. 이 구성에서는 HDMI-1 에 X/키오스크가 없음(DRM master 는 한 프로세스만 가능).
+
+#### 남은 일 / 주의
+- 부팅 때부터 이 구성으로 쓰려면 lightdm 비활성화 필요(지금은 stop 만 한 상태라 재부팅하면 X 가 다시 올라옴 → 그때는 lease 시도 후 실패하고 HDMI-2 가 X 에서 꺼진 채 남을 수 있으니 기본 빌드로 되돌릴 것).
+- 미검증: 모니터 핫플러그 재연결, 시작 시 모니터 없음, HDMI-1 동시 연결, 모니터 해상도가 1920x1080 이 아닐 때 비율(지금은 모드 크기로 늘려 채움).
+- 운영 메모: ssh 로 `pkill -f` 에 패턴을 쓰면 자기 셸이 죽음(`pkill -x cg-streamer` 사용). 단말에서 `xrandr` 는 `XAUTHORITY=/var/run/lightdm/root/:0` + sudo 필요.
+
 ## 2026-10-02
 
 ### 1) HDMI 입력 음성이 무음으로 송출되던 문제 수정
