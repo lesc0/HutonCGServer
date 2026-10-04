@@ -83,6 +83,15 @@ cd ../../bin && DISPLAY=:0 ./start.sh      # cg-editor(8080) + cg-streamer + 키
 - 실시간 우선순위: `/etc/security/limits.d/99-cg-rt.conf` 에 `pi - rtprio 90` 설정함(새 로그인부터 적용). 엔진이 쓰려면 `bin/cgsetup.cfg` 에 `realtime=on`(현재 off).
 - 원격(ssh)에서 실행할 때 명령 줄에 `cg-streamer --run` 문자열이 들어 있으면 start.sh 가 이미 실행 중으로 오인한다.
 
+## 기타 환경 정보
+- **미리 설치돼 있던 시스템 패키지** (OS 이미지 기본): rockchip 빌드 ffmpeg 5.1.6, librockchip-mpp 20260226-2, librga 2.2.0-1, libv4l-rkmpp, gstreamer1.0-rockchip1, `chromium-browser-stable 143.0.7499.40`(`/opt/chromium.org/stable/chromium-browser`, 키오스크용). 이 패키지들은 apt 로 다시 설치하지 않는다.
+- **화면**: lightdm + Xorg(:0) + xfwm4 데스크톱이 떠 있다. HDMI-1 = 에디터 화면(1024x600), HDMI-2 = 송출 모니터(미연결이면 `disconnected` 로 보이고 출력 없음). 연결 상태는 `/sys/class/drm/card0-HDMI-A-{1,2}/status`, `xrandr` 로 확인.
+- **송출 설정** `bin/cgsetup.cfg`: `output=3`(로컬 미리보기 포함), `editor_display=HDMI-1`, `output_display=HDMI-2`, `editor_kiosk=off`(on 이면 start.sh 가 Chromium 키오스크로 에디터를 띄움), `realtime=off`, `udp_ip/udp_port`, `fps=60`, `editor_port=8080`.
+- **cg-editor**: `src/cg-editor/build.sh` 결과는 `src/cg-editor/.next/` 와 `node_modules/`(둘 다 git 제외), 운영 모드 포트 8080. 빌드 결과·로그는 `build/rk3588-release/`, `bin/log/`.
+- **재부팅**: 자동 시작 설정은 없다. 재부팅하면 `DISPLAY=:0 bin/start.sh` 를 다시 실행해야 한다(`ulimit -r`=90 은 유지됨).
+- **PC 에서 단말 접속**: ssh 비밀번호 로그인(키 등록 없음). 단말 계정 `pi` 는 `sudo` 가능(비밀번호는 `readme-test.txt`).
+- **참고(`/home/pi/work`)**: `github.cgserver`(소스), `final`(최종 소스 tgz 풀어 둔 것, 참고용), 기존 `install_trzsz.sh`.
+
 ## PC(Windows) 쪽
 - 작업 폴더 `D:\zPrj26-Huton-MediaServer\github.HutonCGServer\CGServer`, 원격 `https://github.com/lesc0/HutonCGServer.git`
 - 단말 반영: PC 에서 push → 단말에서 pull → `build.sh install` → `start.sh`
