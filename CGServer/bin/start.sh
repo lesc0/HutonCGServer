@@ -39,7 +39,18 @@ else
 fi
 
 # 로컬 화면(HDMI) 해상도 자동 설정 (display.sh). cg-streamer 의 로컬 미리보기(output=3) 창이 X 화면 크기로 만들어지므로 스트리머를 띄우기 *전에* 한다.
-bash ./display.sh
+
+# X 서버가 없으면(lightdm 을 내리고 CG_DRM_OUT 빌드로 HDMI-2 에 DRM 직접 출력하는 구성) display.sh(xrandr)는 건너뛰고,
+# CEF 는 X 없이 headless ozone + 소프트웨어 렌더로 띄운다(headless 에서 --gpu 는 paint 가 60/s 를 넘고 drop 이 계속 늘어 쓰지 않음).
+# CG_NO_X=1 / 0 으로 자동 판단을 바꿀 수 있다.
+if [ -z "${CG_NO_X:-}" ]; then pgrep -x Xorg >/dev/null || pgrep -x atomic-xorg >/dev/null && CG_NO_X=0 || CG_NO_X=1; fi
+if [ "$CG_NO_X" = 1 ]; then
+  echo "  X 서버 없음: DRM 직접 출력 모드(headless CEF, display.sh 생략)"
+  CEF_GFX_ARGS=(--cef:ozone-platform=headless)
+else
+  bash ./display.sh
+  CEF_GFX_ARGS=(--gpu --cef:use-angle=gles-egl)
+fi
 
 if [ "${CG_SKIP_STREAMER:-0}" = 1 ]; then echo "[2/3] cg-streamer 건너뜀(CG_SKIP_STREAMER=1)"; else
 # 표시/인코딩/음성 스레드를 SCHED_FIFO 로 올리려면 실시간 우선순위 한도가 필요하다(없으면 엔진이 일반 스케줄링으로 동작).
@@ -49,7 +60,7 @@ echo "[2/3] cg-streamer (project=${PROJECT:-(빈 프로젝트)}, 송출 설정�
 if pgrep -f "cg-streamer --run" >/dev/null; then
   echo "  이미 실행 중"
 else
-  nohup ./cg-streamer --run --project="project/${PROJECT:-.none}.json" ${CG_UDP:+--udp="$CG_UDP"} --gpu --cef:use-angle=gles-egl --autoplay \
+  nohup ./cg-streamer --run --project="project/${PROJECT:-.none}.json" ${CG_UDP:+--udp="$CG_UDP"} "${CEF_GFX_ARGS[@]}" --autoplay \
     > log/cg-streamer.log 2>&1 &
   disown
   sleep 2
