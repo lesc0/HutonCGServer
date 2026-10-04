@@ -856,8 +856,7 @@ static int DrmPreviewRun() {
   { std::lock_guard<std::mutex> lk(g_drm_sig_mu); g_drm_sig = DrmConnSig(); }
   DrmOut out;
   const int r = out.Open(g_output_display);
-  fprintf(stderr, "[drm] Open -> %d
-", r);
+  fprintf(stderr, "[drm] Open -> %d\n", r);
   if (r != 0) {
     g_preview_w = 0;
     g_preview_h = 0;

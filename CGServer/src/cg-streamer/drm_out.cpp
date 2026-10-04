@@ -71,8 +71,7 @@ bool DrmOut::Lease(const std::string& output, int& rc) {
   Found f;
   if (!query(f)) return false;
   if (!f.out) { fprintf(stderr, "[drm] RandR 에 출력 '%s' 이 없음\n", output.c_str()); return false; }
-  fprintf(stderr, "[drm] RandR %s: connected=%d crtc=%u 가능한 crtc=%zu개
-", output.c_str(), (int)f.connected, (unsigned)f.cur_crtc, f.crtcs.size());
+  fprintf(stderr, "[drm] RandR %s: connected=%d crtc=%u 가능한 crtc=%zu개\n", output.c_str(), (int)f.connected, (unsigned)f.cur_crtc, f.crtcs.size());
   if (!f.connected) { rc = 2; return false; }
   if (f.cur_crtc) {   // X 가 이 출력을 쓰고 있으면 lease 할 수 없으므로 끈다
     printf("[drm] %s 를 X 에서 끕니다(DRM 직접 출력)\n", output.c_str());
@@ -92,8 +91,7 @@ bool DrmOut::Lease(const std::string& output, int& rc) {
     free(ci);
     if (crtc) break;
   }
-  fprintf(stderr, "[drm] lease 요청: crtc=%u output=%u
-", (unsigned)crtc, (unsigned)f.out);
+  fprintf(stderr, "[drm] lease 요청: crtc=%u output=%u\n", (unsigned)crtc, (unsigned)f.out);
   if (!crtc) { fprintf(stderr, "[drm] 쓸 수 있는 빈 CRTC 가 없음\n"); return false; }
 
   xcb_generic_error_t* err = nullptr;
