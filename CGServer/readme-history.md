@@ -56,6 +56,18 @@
 - X 를 유지하면 이 끊김을 설정으로 막기 어렵다. X 를 쓰지 않는 **DRM 직접 출력(1) 항목의 구성**이 확실한 방법. 대신 HDMI-1 데스크탑이 없고 에디터는 PC 브라우저로 사용.
 - 남은 확인: DRM 직접 출력 중에 HDMI-1 을 뽑아도 HDMI-2 출력이 유지되는지, 부팅 시 lightdm 비활성화와 자동 시작 구성.
 
+#### 추가 시도와 최종 분석 (X 방식 유지 시)
+- **커널 강제 연결**: `echo on | sudo tee /sys/class/drm/card0-HDMI-A-2/status`(되돌리기 `detect`, 부트 옵션이면 `video=HDMI-A-2:D`). HDMI-2 의 `disconnected` 구간은 없어졌지만 깜빡임은 그대로 → 의미 없어서 되돌림.
+- **RandR 이벤트로 창을 즉시 이동**(`XOutputGeom`, `XRRSelectInput`): 처음엔 X 가 HDMI-2 를 옮긴 뒤 DisplayWatch 가 1.5초 안정을 확인할 때까지 창이 줄어든 화면 밖(`x=1920`)에 남아 검게 보이는 것이 원인이라 추정해 구현. `libXrandr` 링크 추가(CMake `X11_Xrandr_LIB`). 창은 X 가 모니터를 옮기는 순간 따라 움직이지만(`창 위치만 이동`), **증상은 그대로**.
+- **최종 로그 분석**(`/tmp/mon.sh` 기록 + Xorg.0.log):
+  - HDMI-1 을 뽑을 때(07:29:53): X 가 HDMI-2 를 `+0+0` 으로 옮기고 0.9초 뒤 HDMI-2 가 `disconnected` → 0.45초 뒤 `connected`. 이 약 1.3초 동안 출력 자체가 꺼져 있음 = 검은 화면. 창 코드로는 해결 불가.
+  - HDMI-1 을 꽂을 때(07:29:57): HDMI-2 는 `connected` 유지. 대신 X 가 `Allocate new frame buffer 1920x1080` → `2944x1080` 으로 두 번 새로 잡고 HDMI-2 의 `crtc-131` 에서 `flip timeout`, 이어서 display.sh 가 HDMI-2 를 `+1920` 으로 다시 옮김 → modeset 3번 = 짧은 깜빡임.
+  - 결론: 미리보기 창 재생성/이동은 원인이 아니고, **HDMI-1 연결 변화 때 X 가 HDMI-2 의 위치·화면 크기·프레임버퍼를 다시 설정(modeset)하는 것이 원인**. 이 Xorg 1.20.11 에서는 설정(`Virtual`/`ZaphodHeads`/배치/강제 연결)으로 막지 못함.
+- 확인 못 한 것: HDMI-2 를 뽑았다 꽂는 경우의 복귀 시간, DRM 직접 출력 중 HDMI-1 을 뽑는 시험(X 없이 `connected` 유지는 확인).
+
+#### 코드 상태
+- 커밋됨: 창 위치만 이동, DisplayWatch 재확인 예약화, RandR 이벤트 즉시 이동. 증상은 줄이지 못했지만 부작용은 없어 유지.
+
 #### 현재 단말 상태
 - X 방식으로 복구(기본 빌드, `20-modesetting.conf` 와 `/usr/bin/X` 원복, `atomic-xorg` 링크 삭제). 단말에 남은 백업 파일: `20-modesetting.conf.bak-atomic`(원본), `.bak-virtual`, `/usr/bin/X.bak-atomic`.
 
