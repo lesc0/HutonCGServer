@@ -36,6 +36,29 @@
 - 미검증: 모니터 핫플러그 재연결, 시작 시 모니터 없음, HDMI-1 동시 연결, 모니터 해상도가 1920x1080 이 아닐 때 비율(지금은 모드 크기로 늘려 채움).
 - 운영 메모: ssh 로 `pkill -f` 에 패턴을 쓰면 자기 셸이 죽음(`pkill -x cg-streamer` 사용). 단말에서 `xrandr` 는 `XAUTHORITY=/var/run/lightdm/root/:0` + sudo 필요.
 
+### 2) HDMI-1 을 뽑으면 HDMI-2 송출이 깜빡이는 원인 조사와 개선
+
+#### 증상과 측정
+- HDMI-1 을 뽑으면 HDMI-2 화면이 잠깐 꺼졌다 켜짐. sysfs(`/sys/class/drm/card0-HDMI-A-N/status`)와 `xrandr --listmonitors` 를 0.1초 간격으로 기록(`/tmp/mon.sh`)해 비교.
+- **X 가 떠 있을 때**: 뽑는 순간 X 가 HDMI-2 를 `+1920+0` → `+0+0` 으로 옮기고(modeset), 약 0.5초 뒤 HDMI-2 자체가 `disconnected` 로 보였다가 다시 `connected` (2회 재현: 06:49:56, 07:02:17). 약 1.5초 뒤 우리 DisplayWatch 가 감지해 미리보기 창을 다시 만듦.
+- **X(lightdm) 를 내린 상태**: HDMI-1 만 `disconnected`, HDMI-2 는 계속 `connected` (07:06:49). → 끊김의 원인은 하드웨어/커널이 아니라 **X 가 HDMI-1 제거 때 화면 구성을 다시 계산하며 HDMI-2 에도 modeset 을 하는 것**. (단 X 없이는 아무도 HDMI-2 를 쓰지 않았으므로, 출력 중인 HDMI-2 가 영향받는지는 DRM 직접 출력 상태로 따로 확인해야 함.)
+
+#### 코드 개선 (`main.cpp`, X 방식에 적용)
+- 송출 영역 **크기가 그대로이고 위치만** 바뀌면 미리보기 창을 부수지 않고 `XMoveWindow` 로 옮김(`[preview] 창 위치만 이동`). 크기가 바뀌거나 모니터가 사라지면 예전처럼 다시 만듦.
+- `DisplayWatch` 버그 수정: 연결 변경을 감지한 뒤 3초/8초 재확인을 같은 스레드에서 sleep 으로 기다려서, 그 8초 사이에 뽑았다 꽂으면 최종 상태가 직전 기록과 같아 변경으로 인식되지 않았음 → 두 모니터가 `0,0` 에 겹친 채 남고 송출 창이 HDMI-1 에도 보임. 재확인을 폴링을 막지 않는 예약 방식으로 바꿈.
+
+#### X 쪽 해결 시도 (모두 실패, 원복함)
+- HDMI-2 를 `0,0`, HDMI-1 을 오른쪽에 배치: 데스크탑 패널(xfce)이 어긋나는 부작용 → 원복.
+- `20-modesetting.conf` 에 `Screen` `Virtual 2944 1080`: 화면이 `1920x1080` 으로 줄어들어 효과 없음.
+- `ZaphodHeads`(HDMI-1 / HDMI-2 를 별도 X 화면으로 분리): `kmsdev` 로 지정하면 화면이 하나뿐이라 분리되지 않고, `BusID "platform:display-subsystem"` 을 주면 `Cannot run in framebuffer mode. Please specify busIDs for all framebuffer devices` 로 X 가 시작하지 못함 → 이 Xorg 1.20.11 modesetting 은 이 보드의 platform 장치에서 Zaphod 미지원으로 판단.
+
+#### 결론 / 선택지
+- X 를 유지하면 이 끊김을 설정으로 막기 어렵다. X 를 쓰지 않는 **DRM 직접 출력(1) 항목의 구성**이 확실한 방법. 대신 HDMI-1 데스크탑이 없고 에디터는 PC 브라우저로 사용.
+- 남은 확인: DRM 직접 출력 중에 HDMI-1 을 뽑아도 HDMI-2 출력이 유지되는지, 부팅 시 lightdm 비활성화와 자동 시작 구성.
+
+#### 현재 단말 상태
+- X 방식으로 복구(기본 빌드, `20-modesetting.conf` 와 `/usr/bin/X` 원복, `atomic-xorg` 링크 삭제). 단말에 남은 백업 파일: `20-modesetting.conf.bak-atomic`(원본), `.bak-virtual`, `/usr/bin/X.bak-atomic`.
+
 ## 2026-10-02
 
 ### 1) HDMI 입력 음성이 무음으로 송출되던 문제 수정
