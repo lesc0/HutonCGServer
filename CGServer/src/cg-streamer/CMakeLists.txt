@@ -54,6 +54,13 @@ option(ENABLE_EXTERNAL_BEGIN_FRAME "SendExternalBeginFrame 으로 CEF 내부 타
 if(ENABLE_EXTERNAL_BEGIN_FRAME)
   target_compile_definitions(cg_streamer PRIVATE CG_EBF=1)
 endif()
+option(ENABLE_DRM_OUTPUT "--preview 를 X 창 대신 송출 모니터(HDMI-2)에 DRM/KMS 로 직접 출력 (X 의 RandR lease 사용, CG_DRM_OUT)" OFF)
+if(ENABLE_DRM_OUTPUT)
+  pkg_check_modules(DRM_OUT REQUIRED IMPORTED_TARGET libdrm xcb xcb-randr)
+  target_sources(cg_streamer PRIVATE drm_out.cpp)
+  target_compile_definitions(cg_streamer PRIVATE CG_DRM_OUT=1)
+  target_link_libraries(cg_streamer PkgConfig::DRM_OUT)
+endif()
 SET_EXECUTABLE_TARGET_PROPERTIES(cg_streamer)
 # CEF 가 Release 에 -O2 를 붙이므로(뒤에 오는 쪽이 이김) 우리 코드만 -O3 로 올린다.
 target_compile_options(cg_streamer PRIVATE $<$<CONFIG:Release>:-O3>)

@@ -265,6 +265,20 @@ bool MppH264Encoder::ExportPreviewBgrx(uint8_t* out, int out_w, int out_h) {
   return true;
 }
 
+#ifdef CG_DRM_OUT
+bool MppH264Encoder::ExportPreviewNv12(int dst_fd, int out_w, int out_h, int hor_stride, int ver_stride) {
+  int idx;
+  { std::lock_guard<std::mutex> lk(mu_); idx = last_idx_; }
+  if (idx < 0 || !bufs_[idx] || dst_fd < 0) return false;
+  rga_buffer_t src = wrapbuffer_fd(mpp_buffer_get_fd(bufs_[idx]), w_, h_, RK_FORMAT_YCbCr_420_SP, hor_, ver_);
+  rga_buffer_t dst = wrapbuffer_fd(dst_fd, out_w, out_h, RK_FORMAT_YCbCr_420_SP, hor_stride, ver_stride);
+  rga_buffer_t pat{};
+  IM_STATUS s = improcess(src, dst, pat, {0, 0, w_, h_}, {0, 0, out_w, out_h}, {}, -1, nullptr, nullptr, IM_SYNC);
+  if (s != IM_STATUS_SUCCESS) { fprintf(stderr, "[rga] drm preview: %s\n", imStrError(s)); return false; }
+  return true;
+}
+#endif
+
 void MppH264Encoder::Reset() {
   std::lock_guard<std::mutex> lk(mu_);
   ready_ = -1;

@@ -10,6 +10,8 @@
 //   --autoplay : 로딩 후 Run Setting 시작 페이지부터 자동 재생 (기본은 출력을 비워 두고 명령 대기)
 //   --view : 전체화면 창으로 재생 (DISPLAY 필요, 인코딩 없음)
 //   --preview : 인코딩(UI+영상 합성)은 그대로 하면서, 그 결과를 별도 X11 창(DISPLAY 필요)에도 표시
+//         CG_DRM_OUT=1 ./build.sh 로 빌드(CG_DRM_OUT)하면 X 창 대신 송출 모니터(output_display, 기본 HDMI-2)에 DRM/KMS 로 직접 출력한다
+//         (X 의 RandR lease 로 그 모니터 출력을 빌려 옴 -> X 에서는 꺼짐, 입력 없음. 코드는 drm_out.cpp)
 //   --no-encode : 렌더링만 (인코딩/전송 없음, CEF 자체 부하 측정용)
 //   --no-sync : UI 지터 버퍼 끔 (항상 최신 그림 — 지연 0 이지만 CEF 박자와 어긋나 0/2프레임씩 끊김)
 //   --paint-fps=N : CEF 렌더링 fps (기본 60). 인코딩/출력은 60fps 유지(직전 프레임 반복)
@@ -69,6 +71,7 @@
 #include "audio_mixer.h"
 #include "rt.h"
 #include "cef_dumper.h"
+#include "drm_out.h"   // CG_DRM_OUT 빌드에서만 내용이 있음
 
 // X11 은 CEF 헤더 뒤에 포함(Success/None 등 매크로가 CEF의 동명 심볼과 충돌).
 #include <X11/Xlib.h>
@@ -830,12 +833,80 @@ static int PreviewRun() {
   return (g_preview_reset && !g_quit) ? 1 : 0;
 }
 
+#ifdef CG_DRM_OUT
+// CG_DRM_OUT 빌드: X 창 대신 송출 모니터(output_display)에 DRM/KMS 로 직접 출력(drm_out.h). 입력(마우스/키보드)은 받지 않는다.
+// 반환값 의미는 PreviewRun 과 같다(0 종료, 1 다시 만들기, 2 모니터가 없거나 열기 실패라 reset 을 기다림).
+static std::mutex g_drm_sig_mu;
+static std::string g_drm_sig;   // 마지막으로 열었을 때의 송출 커넥터 상태(연결/EDID). 바뀌면 다시 연다.
+
+static std::string DrmConnSig() {
+  int n = 0;
+  if (g_output_display.size() >= 6 && g_output_display.compare(0, 5, "HDMI-") == 0) n = atoi(g_output_display.c_str() + 5);
+  if (n < 1) return {};
+  const std::string base = "/sys/class/drm/card0-HDMI-A-" + std::to_string(n);
+  std::ifstream f(base + "/status");
+  std::string v;
+  f >> v;
+  std::ifstream e(base + "/edid", std::ios::binary);
+  const std::string edid((std::istreambuf_iterator<char>(e)), std::istreambuf_iterator<char>());
+  return v + ":" + std::to_string(std::hash<std::string>{}(edid) % 100000);
+}
+
+static int DrmPreviewRun() {
+  { std::lock_guard<std::mutex> lk(g_drm_sig_mu); g_drm_sig = DrmConnSig(); }
+  DrmOut out;
+  const int r = out.Open(g_output_display);
+  if (r != 0) {
+    g_preview_w = 0;
+    g_preview_h = 0;
+    if (r == 2) printf("[drm] 송출 모니터(%s)가 연결되어 있지 않음\n", g_output_display.c_str());
+    else fprintf(stderr, "[drm] %s DRM 직접 출력을 열지 못함 - 모니터를 다시 꽂거나 reload 하면 다시 시도\n", g_output_display.c_str());
+    return 2;
+  }
+  g_preview_x = 0;
+  g_preview_y = 0;
+  g_preview_w = out.width();
+  g_preview_h = out.height();
+
+  using clk = std::chrono::steady_clock;
+  uint64_t seen = 0, drawn = 0;
+  int fails = 0;
+  auto stat_t0 = clk::now();
+  while (!g_quit && !g_preview_reset) {
+    {   // 인코더가 새 프레임을 만들 때까지 대기(종료/재생성 확인용으로 50ms 마다 깨어남)
+      std::unique_lock<std::mutex> lk(g_pv_mu);
+      g_pv_cv.wait_for(lk, std::chrono::milliseconds(50), [&] { return g_pv_seq != seen || g_quit || g_preview_reset; });
+      if (g_pv_seq == seen) continue;
+      seen = g_pv_seq;
+    }
+    if (!g_enc_ok) continue;
+    if (out.Present([](int fd, int w, int h, int hs, int vs) { return g_encoder.ExportPreviewNv12(fd, w, h, hs, vs); })) {
+      drawn++;
+      fails = 0;
+    } else if (++fails >= 30) {   // 모니터가 뽑히는 등으로 계속 실패: 접고 reset 을 기다림
+      fprintf(stderr, "[drm] 출력이 계속 실패해 중단합니다\n");
+      return 2;
+    }
+    if (clk::now() - stat_t0 >= std::chrono::seconds(1)) {
+      printf("[preview-stat] drm flip=%llu/s\n", (unsigned long long)drawn);
+      drawn = 0;
+      stat_t0 = clk::now();
+    }
+  }
+  return (g_preview_reset && !g_quit) ? 1 : 0;
+}
+#endif
+
 static void PreviewLoop() {
   pthread_setname_np(pthread_self(), "cg-preview");
   SetRealtime("cg-preview", 49);
   for (;;) {
     g_preview_reset = false;
+#ifdef CG_DRM_OUT
+    const int r = DrmPreviewRun();
+#else
     const int r = PreviewRun();
+#endif
     if (r == 0 || g_quit) break;
     if (r == 2) {   // 송출 모니터가 없음: 창을 띄우지 않고 ApplyDisplay 가 모니터를 찾아 reset 표시를 할 때까지 기다린다
       printf("[preview] 송출 모니터(%s)가 없어 미리보기 창을 띄우지 않음\n", g_output_display.c_str());
@@ -866,12 +937,25 @@ static void ApplyDisplay() {
   std::thread([] {
     static std::atomic<bool> busy{false};
     if (busy.exchange(true)) return;
+#ifndef CG_DRM_OUT   // DRM 직접 출력 빌드는 송출 모니터를 X 가 쓰지 않아야 하므로 display.sh(송출 모니터를 켬)를 부르지 않는다
     const std::string script = std::filesystem::path(g_exe).parent_path().string() + "/display.sh";
     if (std::filesystem::exists(script)) {
       const std::string cmd = "bash \"" + script + "\" >/dev/null 2>&1";
       if (system(cmd.c_str()) != 0) fprintf(stderr, "[display] display.sh 실행 실패\n");
     }
+#endif
     if (g_output_type == 3 && (g_audio_out == "auto" || g_audio_out.empty())) g_audio.ChangeLocalOut(PickAudioDev());   // 소리가 나갈 HDMI 가 바뀌었을 수 있음
+#ifdef CG_DRM_OUT
+    if (g_preview) {   // 송출 커넥터의 연결/EDID 가 달라졌으면 DRM 출력을 다시 연다
+      const std::string sig = DrmConnSig();
+      std::lock_guard<std::mutex> lk(g_drm_sig_mu);
+      if (sig != g_drm_sig) {
+        printf("[display] 송출 모니터 상태 변경(%s -> %s): DRM 출력 다시 열기\n", g_drm_sig.c_str(), sig.c_str());
+        g_drm_sig = sig;
+        g_preview_reset = true;
+      }
+    }
+#else
     if (g_preview) {   // display.sh 가 기록한 송출 모니터 영역이 지금 미리보기 창과 다르면(또는 모니터가 생기거나 사라졌으면) 창을 다시 만든다
       int x = 0, y = 0, w = 0, h = 0;
       const bool have = ReadOutputGeom(x, y, w, h);
@@ -882,6 +966,7 @@ static void ApplyDisplay() {
         g_preview_reset = true;
       }
     }
+#endif
     busy = false;
   }).detach();
 }

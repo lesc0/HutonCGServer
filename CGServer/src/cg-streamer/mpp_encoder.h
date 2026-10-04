@@ -36,6 +36,10 @@ class MppH264Encoder {
   // 미리보기(--preview): 직전 Encode() 가 사용한 프레임(NV12)을 RGA 로 축소+BGRX 변환.
   // EncodeLoop 스레드에서 Encode() 직후 동기 호출 전제(그 버퍼가 아직 재사용되지 않음).
   bool ExportPreviewBgrx(uint8_t* out, int out_w, int out_h);
+#ifdef CG_DRM_OUT
+  // DRM 직접 출력(CG_DRM_OUT): 같은 프레임을 RGA 로 out_w x out_h NV12 dmabuf 에 크기 맞춰 복사(stride 는 픽셀 단위).
+  bool ExportPreviewNv12(int dst_fd, int out_w, int out_h, int hor_stride, int ver_stride);
+#endif
 
  private:
   int AcquireWrite();   // 읽는 중/최신이 아닌 버퍼 index

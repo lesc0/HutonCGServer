@@ -48,6 +48,9 @@ else
   OPTS=(-DCMAKE_BUILD_TYPE=Release)
 fi
 
+# CG_DRM_OUT=1 ./build.sh : --preview 를 X 창 대신 HDMI-2 에 DRM 으로 직접 출력하는 빌드(CG_DRM_OUT). 기본은 기존 X 창 방식.
+[ "${CG_DRM_OUT:-}" = 1 ] && OPTS+=(-DENABLE_DRM_OUTPUT=ON)
+
 pgrep -x cg-streamer >/dev/null && echo "[build] 주의: cg-streamer 가 실행 중입니다. 빌드 후 재시작해야 반영됩니다."
 
 echo "[build] cmake ($MODE, CEF_ROOT=$CEF_ROOT)"
