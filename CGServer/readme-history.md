@@ -29,7 +29,10 @@
 - 에디터(cg-editor)는 웹 서버라 PC 브라우저로 `http://10.10.10.56:8080` 접속. 이 구성에서는 HDMI-1 에 X/키오스크가 없음(DRM master 는 한 프로세스만 가능).
 
 #### 남은 일 / 주의
-- 부팅 때부터 이 구성으로 쓰려면 lightdm 비활성화 필요(지금은 stop 만 한 상태라 재부팅하면 X 가 다시 올라옴 → 그때는 lease 시도 후 실패하고 HDMI-2 가 X 에서 꺼진 채 남을 수 있으니 기본 빌드로 되돌릴 것).
+- 부팅 때부터 이 구성으로 쓰려면 lightdm 비활성화 필요(지금은 stop 만 한 상태라 재부팅하면 X 가 다시 올라옴 → 그때는 lease 시도 후 실패하고 HDMI-2 가 X 에서 꺼진 채 남을 수 있으니 기본 빌드로 되돌릴 것).
+- 부팅 구성 정리: 지금 DRM 직접 출력은 `systemctl stop lightdm` 만 해 둔 상태에서 동작한다(`start.sh` 가 X 없음을 자동 감지). 영구 적용은 `sudo systemctl disable lightdm`(되돌리기 `enable`).
+- 미확인: cg-streamer/에디터가 부팅 때 어떻게 시작되는지. 단말이 자동 로그인(`/etc/lightdm/lightdm.conf` `autologin-user=pi`)이라 데스크탑 세션 자동 시작에서 `start.sh` 가 불리고 있었다면 lightdm 을 끄면 같이 안 뜬다 → 그 경우 systemd 서비스로 `bin/start.sh` 를 등록해야 함(확인 필요).
+- 불필요해진 X 변경(`20-modesetting.conf` 의 Atomic, `/usr/bin/X` 수정, `atomic-xorg` 링크)은 둬도 무해하고, 되돌리려면 백업(`.bak-atomic`)으로 복원.
 - 미검증: 모니터 핫플러그 재연결, 시작 시 모니터 없음, HDMI-1 동시 연결, 모니터 해상도가 1920x1080 이 아닐 때 비율(지금은 모드 크기로 늘려 채움).
 - 운영 메모: ssh 로 `pkill -f` 에 패턴을 쓰면 자기 셸이 죽음(`pkill -x cg-streamer` 사용). 단말에서 `xrandr` 는 `XAUTHORITY=/var/run/lightdm/root/:0` + sudo 필요.
 
