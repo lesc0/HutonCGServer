@@ -78,6 +78,7 @@
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
 #include <X11/extensions/XShm.h>
+#include <X11/extensions/Xrandr.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #undef Success
@@ -675,6 +676,24 @@ static bool ReadOutputGeom(int& x, int& y, int& w, int& h) {
   return true;
 }
 
+// X(RandR)가 지금 알고 있는 출력 name 의 영역(x y w h). 꺼져 있거나 없으면 false.
+// display.sh 가 기록한 파일은 연결 변경을 감지(1.5초 이상 안정)한 뒤에야 갱신되므로, X 가 모니터를 옮긴 그 순간 창을 따라 옮기는 데는 이쪽을 쓴다.
+static bool XOutputGeom(Display* dpy, Window root, const std::string& name, int& x, int& y, int& w, int& h) {
+  XRRScreenResources* res = XRRGetScreenResourcesCurrent(dpy, root);
+  if (!res) return false;
+  bool ok = false;
+  for (int i = 0; i < res->noutput && !ok; i++) {
+    XRROutputInfo* oi = XRRGetOutputInfo(dpy, res, res->outputs[i]);
+    if (oi && name == oi->name && oi->crtc) {
+      XRRCrtcInfo* ci = XRRGetCrtcInfo(dpy, res, oi->crtc);
+      if (ci) { x = ci->x; y = ci->y; w = (int)ci->width; h = (int)ci->height; ok = true; XRRFreeCrtcInfo(ci); }
+    }
+    if (oi) XRRFreeOutputInfo(oi);
+  }
+  XRRFreeScreenResources(res);
+  return ok;
+}
+
 // 반환: true = 화면 해상도 변경으로 다시 만들어야 함, false = 종료/실패
 // 반환: 0 = 종료/실패, 1 = 송출 모니터 영역이 바뀌어 다시 만들어야 함, 2 = 송출 모니터가 없어 창을 띄우지 않음(모니터가 생길 때까지 기다림)
 [[maybe_unused]] static int PreviewRun() {   // CG_DRM_OUT 빌드에서는 쓰이지 않음
@@ -773,23 +792,40 @@ static bool ReadOutputGeom(int& x, int& y, int& w, int& h) {
   double draw_gap_max_ms = 0;                 // 진단용: 그린 시각 사이 최대 간격(ms)
   auto stat_t0 = clk::now();
   printf("[preview] %dx%d 창 시작 (%s)\n", sw, sh, shm_ok ? "XShm 더블버퍼" : "XPutImage");
+  // 창을 새 위치로 옮김(다시 만들지 않음). 창 관리자가 요청 위치를 알도록 힌트도 갱신.
+  auto move_to = [&](int nx, int ny) {
+    if (nx == g_preview_x && ny == g_preview_y) return;
+    XSizeHints nsz{};
+    nsz.flags = USPosition | USSize | PPosition | PSize;
+    nsz.x = nx; nsz.y = ny; nsz.width = sw; nsz.height = sh;
+    XSetWMNormalHints(dpy, win, &nsz);
+    XMoveWindow(dpy, win, nx, ny);
+    XFlush(dpy);
+    printf("[preview] 창 위치만 이동 +%d+%d -> +%d+%d (다시 만들지 않음)
+", (int)g_preview_x, (int)g_preview_y, nx, ny);
+    g_preview_x = nx;
+    g_preview_y = ny;
+  };
+  // X(RandR)가 송출 모니터를 옮기면(다른 모니터를 뽑거나 꽂을 때) 그 즉시 창도 따라 옮긴다. display.sh 기록 파일/DisplayWatch 는 1.5초 이상 안정된 뒤에야 알아채서,
+  // 그 사이 창이 줄어든 화면 밖에 남아 송출 모니터가 검게 보였다(깜빡임).
+  int rr_ev = 0, rr_err = 0;
+  const bool have_rr = XRRQueryExtension(dpy, &rr_ev, &rr_err);
+  if (have_rr) XRRSelectInput(dpy, RootWindow(dpy, screen), RRScreenChangeNotifyMask | RRCrtcChangeNotifyMask | RROutputChangeNotifyMask);
   while (!g_quit) {
+    if (have_rr) {
+      XEvent rev;
+      bool changed = false;
+      while (XCheckTypedEvent(dpy, rr_ev + RRScreenChangeNotify, &rev)) { XRRUpdateConfiguration(&rev); changed = true; }
+      while (XCheckTypedEvent(dpy, rr_ev + RRNotify, &rev)) changed = true;
+      int ox = 0, oy = 0, ow = 0, oh = 0;
+      if (changed && XOutputGeom(dpy, RootWindow(dpy, screen), g_output_display, ox, oy, ow, oh) && ow == g_preview_w && oh == g_preview_h) move_to(ox, oy);
+    }
     if (g_preview_reset) {
-      // 송출 영역의 크기가 그대로이고 위치만 바뀐 경우(다른 모니터를 뽑거나 꽂아 배치가 달라짐)는 창을 부수지 않고 그 자리에서 옮긴다
-      // (창을 다시 만들면 그 사이 화면이 비어 깜빡임). 크기가 달라졌거나 모니터가 없어졌으면 예전처럼 창을 다시 만든다.
+      // 송출 영역의 크기가 그대로이고 위치만 바뀐 경우는 창을 부수지 않고 옮긴다(창을 다시 만들면 그 사이 화면이 비어 깜빡임).
+      // 크기가 달라졌거나 모니터가 없어졌으면 예전처럼 창을 다시 만든다.
       int nx = 0, ny = 0, nw = 0, nh = 0;
       if (ReadOutputGeom(nx, ny, nw, nh) && nw == g_preview_w && nh == g_preview_h) {
-        if (nx != g_preview_x || ny != g_preview_y) {
-          XSizeHints nsz{};
-          nsz.flags = USPosition | USSize | PPosition | PSize;
-          nsz.x = nx; nsz.y = ny; nsz.width = sw; nsz.height = sh;
-          XSetWMNormalHints(dpy, win, &nsz);
-          XMoveWindow(dpy, win, nx, ny);
-          XFlush(dpy);
-          printf("[preview] 창 위치만 이동 +%d+%d -> +%d+%d (다시 만들지 않음)\n", (int)g_preview_x, (int)g_preview_y, nx, ny);
-          g_preview_x = nx;
-          g_preview_y = ny;
-        }
+        move_to(nx, ny);
         g_preview_reset = false;
       } else {
         break;

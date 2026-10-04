@@ -65,7 +65,7 @@ SET_EXECUTABLE_TARGET_PROPERTIES(cg_streamer)
 # CEF 가 Release 에 -O2 를 붙이므로(뒤에 오는 쪽이 이김) 우리 코드만 -O3 로 올린다.
 target_compile_options(cg_streamer PRIVATE $<$<CONFIG:Release>:-O3>)
 add_dependencies(cg_streamer libcef_dll_wrapper)
-target_link_libraries(cg_streamer libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} rockchip_mpp rga PkgConfig::FFMPEG pthread ${CMAKE_DL_LIBS} ${X11_LIBRARIES} ${X11_Xext_LIB})
+target_link_libraries(cg_streamer libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} rockchip_mpp rga PkgConfig::FFMPEG pthread ${CMAKE_DL_LIBS} ${X11_LIBRARIES} ${X11_Xext_LIB} ${X11_Xrandr_LIB})
 target_include_directories(cg_streamer PRIVATE ${X11_INCLUDE_DIR} ${CG_ROOT}/inc)
 
 # 실행 파일은 bin/ 에 만든다. CEF 런타임 파일(libcef.so, pak, icudtl 등)도 그 옆으로 복사.
