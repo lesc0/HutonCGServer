@@ -11,7 +11,7 @@
 
 #include "dma_heap_buf.h"
 
-struct _xcb_connection_t;
+struct xcb_connection_t;
 
 class DrmOut {
  public:
@@ -35,7 +35,7 @@ class DrmOut {
   bool Setup();
   bool AllocFbs();
 
-  _xcb_connection_t* xcb_ = nullptr;
+  xcb_connection_t* xcb_ = nullptr;
   int fd_ = -1;                       // lease 로 받은 DRM fd
   uint32_t conn_ = 0, crtc_ = 0, plane_ = 0, mode_blob_ = 0;
   uint32_t p_conn_crtc_ = 0, p_crtc_mode_ = 0, p_crtc_active_ = 0;
