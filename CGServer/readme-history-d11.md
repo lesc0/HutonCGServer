@@ -1,0 +1,1053 @@
+# 작업 히스토리 (cef_mpp / zcgserver)
+
+## 2026-10-04
+
+### 1) 송출 모니터(HDMI-2)에 X 창 없이 DRM/KMS 로 직접 출력 (CG_DRM_OUT 빌드)
+
+#### 배경
+- 미리보기를 X 창(xfwm4 가 관리)으로 띄우면 창 배치(DOCK)·마우스 클릭 문제가 반복됨 → HDMI-2 에는 입력이 필요 없으니 X 를 거치지 않고 DRM 으로 직접 쓰기로 함.
+- 기존 X 창 경로는 그대로 두고, **컴파일 define `CG_DRM_OUT`** 으로만 켠다: `CG_DRM_OUT=1 ./build.sh install`(cmake `-DENABLE_DRM_OUTPUT=ON`). define 이 없으면 기존 동작 그대로. `build.sh` 는 항상 `-DENABLE_DRM_OUTPUT=ON/OFF` 를 명시(cmake 캐시에 ON 이 남지 않게).
+
+#### 구현
+- 새 파일 `src/cg-streamer/drm_out.{h,cpp}`: libdrm atomic modeset(권장 모드) + NV12 plane 에 FB 2장을 번갈아 flip(블로킹 commit, vblank 동기). 인코더가 만든 NV12 를 RGA 로 모드 크기의 dmabuf 에 복사(`MppH264Encoder::ExportPreviewNv12`, define 안에서만 존재).
+- `main.cpp`: `DrmPreviewRun()`(define 일 때 `PreviewLoop` 이 `PreviewRun` 대신 호출), `DrmConnSig()`(HDMI-A-N 의 status+EDID 해시, 모니터 연결 변경 시 `ApplyDisplay` 가 출력을 다시 엶). define 일 때 `ApplyDisplay` 는 display.sh 를 부르지 않음(X 가 HDMI-2 를 켜 버리면 안 됨).
+- 열기 순서: ① X 가 있으면 RandR **lease**(xcb `xcb_randr_create_lease`)로 HDMI-2 의 connector+CRTC 를 빌려 별도 DRM fd 를 얻음 ② X 가 없으면(xcb 연결 실패) `/dev/dri/card0` 을 **직접 열어 DRM master** 가 되고 HDMI-A-N connector/CRTC 를 고름.
+
+#### 조사: X 위에서 lease 가 안 되는 이유 (결국 쓰지 않음)
+- 증상: `RandR lease 생성 실패 (error_code=8)`, 커널 `drm.debug=0x80` 로그에 `lease validation failed`(EINVAL). 커널은 lease 에 CRTC·connector·**plane** 이 모두 있어야 허용.
+- Xorg 1.20.11 modesetting(`drmmode_create_lease`)은 `Option "Atomic" "true"` 일 때만 plane 을 넣음 → `20-modesetting.conf` 에 추가(백업 `.bak-atomic`).
+- 그래도 안 됨: 커널이 프로세스 이름이 `X` 로 시작하면 atomic 을 거부(`broken atomic modeset userspace detected, disabling atomic`). Xorg 를 `atomic-xorg`(심볼릭 링크) 이름으로 띄우도록 `/usr/bin/X` 를 고쳤더니(`Xorg.wrap` 분기 포함) 커널 경고는 사라졌지만 lease 는 여전히 plane 없이 2개 object 만 넘김(gdb 로 `drmModeCreateLease` count=2 확인, flip 도 레거시 `PAGE_FLIP`). 이 Xorg 빌드는 atomic 옵션이 실제로 동작하지 않는 것으로 보임 → lease 방식 포기.
+- 단말에 남은 변경(필요 없으면 백업으로 복원 후 lightdm 재시작): `/etc/X11/xorg.conf.d/20-modesetting.conf`(Atomic 추가), `/usr/bin/X`(백업 `/usr/bin/X.bak-atomic`), `/usr/lib/xorg/atomic-xorg` 링크.
+
+#### 채택: X 를 내리고 DRM master 직접 사용
+- `sudo systemctl stop lightdm` 후 실행. CEF 는 X 가 없으면 `Missing X server or $DISPLAY` 로 죽으므로 `--cef:ozone-platform=headless` 필요.
+- headless 에서 `--gpu --cef:use-angle=gles-egl` 도 뜨지만 `paint=100/s` 로 과공급 + `drop` 이 계속 늘어 **소프트웨어 렌더(옵션 없음)** 사용: `paint=60/s drop=0 enc=60fps`.
+- `bin/start.sh`: X(`Xorg`/`atomic-xorg`) 프로세스가 없으면 display.sh 를 건너뛰고 `--cef:ozone-platform=headless` 로 실행(`CG_NO_X=1/0` 으로 강제 가능).
+
+#### 결과 (단말 CM3588)
+- `[drm] DRM 직접 열기: HDMI-A-2 connector 495 crtc 131` → 1024x600@60, plane 115(NV12) 로 `drm flip=61/s`, `enc=60fps`, 커널 에러 없음. (모니터 화면 육안 확인은 사용자 몫)
+- 에디터(cg-editor)는 웹 서버라 PC 브라우저로 `http://10.10.10.56:8080` 접속. 이 구성에서는 HDMI-1 에 X/키오스크가 없음(DRM master 는 한 프로세스만 가능).
+
+#### 남은 일 / 주의
+- 부팅 때부터 이 구성으로 쓰려면 lightdm 비활성화 필요(지금은 stop 만 한 상태라 재부팅하면 X 가 다시 올라옴 → 그때는 lease 시도 후 실패하고 HDMI-2 가 X 에서 꺼진 채 남을 수 있으니 기본 빌드로 되돌릴 것).
+- 부팅 구성 정리: 지금 DRM 직접 출력은 `systemctl stop lightdm` 만 해 둔 상태에서 동작한다(`start.sh` 가 X 없음을 자동 감지). 영구 적용은 `sudo systemctl disable lightdm`(되돌리기 `enable`).
+- 미확인: cg-streamer/에디터가 부팅 때 어떻게 시작되는지. 단말이 자동 로그인(`/etc/lightdm/lightdm.conf` `autologin-user=pi`)이라 데스크탑 세션 자동 시작에서 `start.sh` 가 불리고 있었다면 lightdm 을 끄면 같이 안 뜬다 → 그 경우 systemd 서비스로 `bin/start.sh` 를 등록해야 함(확인 필요).
+- 불필요해진 X 변경(`20-modesetting.conf` 의 Atomic, `/usr/bin/X` 수정, `atomic-xorg` 링크)은 둬도 무해하고, 되돌리려면 백업(`.bak-atomic`)으로 복원.
+- 미검증: 모니터 핫플러그 재연결, 시작 시 모니터 없음, HDMI-1 동시 연결, 모니터 해상도가 1920x1080 이 아닐 때 비율(지금은 모드 크기로 늘려 채움).
+- 운영 메모: ssh 로 `pkill -f` 에 패턴을 쓰면 자기 셸이 죽음(`pkill -x cg-streamer` 사용). 단말에서 `xrandr` 는 `XAUTHORITY=/var/run/lightdm/root/:0` + sudo 필요.
+
+### 2) HDMI-1 을 뽑으면 HDMI-2 송출이 깜빡이는 원인 조사와 개선
+
+#### 증상과 측정
+- HDMI-1 을 뽑으면 HDMI-2 화면이 잠깐 꺼졌다 켜짐. sysfs(`/sys/class/drm/card0-HDMI-A-N/status`)와 `xrandr --listmonitors` 를 0.1초 간격으로 기록(`/tmp/mon.sh`)해 비교.
+- **X 가 떠 있을 때**: 뽑는 순간 X 가 HDMI-2 를 `+1920+0` → `+0+0` 으로 옮기고(modeset), 약 0.5초 뒤 HDMI-2 자체가 `disconnected` 로 보였다가 다시 `connected` (2회 재현: 06:49:56, 07:02:17). 약 1.5초 뒤 우리 DisplayWatch 가 감지해 미리보기 창을 다시 만듦.
+- **X(lightdm) 를 내린 상태**: HDMI-1 만 `disconnected`, HDMI-2 는 계속 `connected` (07:06:49). → 끊김의 원인은 하드웨어/커널이 아니라 **X 가 HDMI-1 제거 때 화면 구성을 다시 계산하며 HDMI-2 에도 modeset 을 하는 것**. (단 X 없이는 아무도 HDMI-2 를 쓰지 않았으므로, 출력 중인 HDMI-2 가 영향받는지는 DRM 직접 출력 상태로 따로 확인해야 함.)
+
+#### 코드 개선 (`main.cpp`, X 방식에 적용)
+- 송출 영역 **크기가 그대로이고 위치만** 바뀌면 미리보기 창을 부수지 않고 `XMoveWindow` 로 옮김(`[preview] 창 위치만 이동`). 크기가 바뀌거나 모니터가 사라지면 예전처럼 다시 만듦.
+- `DisplayWatch` 버그 수정: 연결 변경을 감지한 뒤 3초/8초 재확인을 같은 스레드에서 sleep 으로 기다려서, 그 8초 사이에 뽑았다 꽂으면 최종 상태가 직전 기록과 같아 변경으로 인식되지 않았음 → 두 모니터가 `0,0` 에 겹친 채 남고 송출 창이 HDMI-1 에도 보임. 재확인을 폴링을 막지 않는 예약 방식으로 바꿈.
+
+#### X 쪽 해결 시도 (모두 실패, 원복함)
+- HDMI-2 를 `0,0`, HDMI-1 을 오른쪽에 배치: 데스크탑 패널(xfce)이 어긋나는 부작용 → 원복.
+- `20-modesetting.conf` 에 `Screen` `Virtual 2944 1080`: 화면이 `1920x1080` 으로 줄어들어 효과 없음.
+- `ZaphodHeads`(HDMI-1 / HDMI-2 를 별도 X 화면으로 분리): `kmsdev` 로 지정하면 화면이 하나뿐이라 분리되지 않고, `BusID "platform:display-subsystem"` 을 주면 `Cannot run in framebuffer mode. Please specify busIDs for all framebuffer devices` 로 X 가 시작하지 못함 → 이 Xorg 1.20.11 modesetting 은 이 보드의 platform 장치에서 Zaphod 미지원으로 판단.
+
+#### 결론 / 선택지
+- X 를 유지하면 이 끊김을 설정으로 막기 어렵다. X 를 쓰지 않는 **DRM 직접 출력(1) 항목의 구성**이 확실한 방법. 대신 HDMI-1 데스크탑이 없고 에디터는 PC 브라우저로 사용.
+- 남은 확인: DRM 직접 출력 중에 HDMI-1 을 뽑아도 HDMI-2 출력이 유지되는지, 부팅 시 lightdm 비활성화와 자동 시작 구성.
+
+#### 추가 시도와 최종 분석 (X 방식 유지 시)
+- **커널 강제 연결**: `echo on | sudo tee /sys/class/drm/card0-HDMI-A-2/status`(되돌리기 `detect`, 부트 옵션이면 `video=HDMI-A-2:D`). HDMI-2 의 `disconnected` 구간은 없어졌지만 깜빡임은 그대로 → 의미 없어서 되돌림.
+- **RandR 이벤트로 창을 즉시 이동**(`XOutputGeom`, `XRRSelectInput`): 처음엔 X 가 HDMI-2 를 옮긴 뒤 DisplayWatch 가 1.5초 안정을 확인할 때까지 창이 줄어든 화면 밖(`x=1920`)에 남아 검게 보이는 것이 원인이라 추정해 구현. `libXrandr` 링크 추가(CMake `X11_Xrandr_LIB`). 창은 X 가 모니터를 옮기는 순간 따라 움직이지만(`창 위치만 이동`), **증상은 그대로**.
+- **최종 로그 분석**(`/tmp/mon.sh` 기록 + Xorg.0.log):
+  - HDMI-1 을 뽑을 때(07:29:53): X 가 HDMI-2 를 `+0+0` 으로 옮기고 0.9초 뒤 HDMI-2 가 `disconnected` → 0.45초 뒤 `connected`. 이 약 1.3초 동안 출력 자체가 꺼져 있음 = 검은 화면. 창 코드로는 해결 불가.
+  - HDMI-1 을 꽂을 때(07:29:57): HDMI-2 는 `connected` 유지. 대신 X 가 `Allocate new frame buffer 1920x1080` → `2944x1080` 으로 두 번 새로 잡고 HDMI-2 의 `crtc-131` 에서 `flip timeout`, 이어서 display.sh 가 HDMI-2 를 `+1920` 으로 다시 옮김 → modeset 3번 = 짧은 깜빡임.
+  - 결론: 미리보기 창 재생성/이동은 원인이 아니고, **HDMI-1 연결 변화 때 X 가 HDMI-2 의 위치·화면 크기·프레임버퍼를 다시 설정(modeset)하는 것이 원인**. 이 Xorg 1.20.11 에서는 설정(`Virtual`/`ZaphodHeads`/배치/강제 연결)으로 막지 못함.
+- 확인 못 한 것: HDMI-2 를 뽑았다 꽂는 경우의 복귀 시간, DRM 직접 출력 중 HDMI-1 을 뽑는 시험(X 없이 `connected` 유지는 확인).
+
+#### 코드 상태
+- 커밋됨: 창 위치만 이동, DisplayWatch 재확인 예약화, RandR 이벤트 즉시 이동. 증상은 줄이지 못했지만 부작용은 없어 유지.
+
+#### 현재 단말 상태
+- X 방식으로 복구(기본 빌드, `20-modesetting.conf` 와 `/usr/bin/X` 원복, `atomic-xorg` 링크 삭제). 단말에 남은 백업 파일: `20-modesetting.conf.bak-atomic`(원본), `.bak-virtual`, `/usr/bin/X.bak-atomic`.
+
+## 2026-10-02
+
+### 1) HDMI 입력 음성이 무음으로 송출되던 문제 수정
+
+
+#### 증상
+- cg-streamer 가 HDMI IN(`rk_hdmirx`) 라이브 소스일 때 음성도 AAC 로 인코딩해 TS 로 보내는데, 송출 TS 의 음성이 완전 무음(-91dB)이고 player 에서 소리가 안 남.
+  로그에는 `[hdmirx] 음성 캡처 시작`이 수천 번 반복(캡처를 열자마자 read 실패 → 복구 실패 → 닫고 재오픈 루프). mp4 영상의 음성은 정상(-11dB).
+
+#### 진단 (테스트 단말 CM3588, 커널 6.1.141)
+- 송출을 단말 자신(`CG_UDP=10.10.10.56:1234`)으로 보내 `ffmpeg -c copy` 로 받아 `ffprobe`/`volumedetect` 로 확인. 스트림 구조(H.264 + AAC 48k 스테레오)는 정상, 음성 값만 무음.
+- 스트리머 없이 `arecord -D plughw:CARD=rockchiphdmiin,DEV=0 -f S16_LE -r 48000 -c 2` 도 `read error: Input/output error`. HDMI 수신기 쪽은 `audio_present: 1`, `audio on`(48000/2ch).
+- 사용자가 `arecord -D hw:0,0 ... --period-size=1024 --buffer-size=4096` 은 된다고 알려 줌. 그래서 버퍼 크기가 원인인지 확인했는데 `--buffer-time=100000` 만 줘도 되고 기본값만 안 됨 → 크기 문제가 아니었음.
+- python ctypes 로 앱과 같은 호출(`snd_pcm_open` → `snd_pcm_set_params(…, 100000)` → `snd_pcm_readi`)을 재현: `readi` 가 계속 -5(EIO). 사이에 `snd_pcm_start()` 를 넣으면 `[1024, 1024, …]` 로 정상 + 실제 신호. `hw_params` 로 period 1024/buffer 4096 을 직접 지정해도 정상.
+- **원인**: 이 보드(rk_hdmirx 캡처 카드)는 `readi` 의 자동 시작(PREPARED → 시작)이 EIO 로 실패해서, 열고 나서 `snd_pcm_start()` 를 명시적으로 불러야 한다.
+
+#### 수정 (`src/cg-streamer/hdmirx_source.cpp`, 커밋 af92fae)
+- libasound 를 dlopen 하는 `AudioRun` 에 `snd_pcm_start` 심볼 추가. 캡처를 열고 `set_params` 직후 `start` 호출(실패하면 닫고 500ms 뒤 재시도).
+- 에러 복구(`snd_pcm_recover`) 뒤에도 `start` 를 다시 호출. recover/start 가 실패하면 닫고 다시 연다.
+
+#### 검증
+- 단말에서 `git pull` → `cmake --build --preset rk3588` 빌드 성공 → `수영-기록` 프로젝트(HDMI 소스)를 자기 자신으로 송출해 받아 확인: 음성 mean -25.8dB / max -10.3dB(수정 전 -91dB 무음), `음성 캡처 시작` 로그 1회(반복 없음). 이후 사용자가 player 에서 소리가 나옴을 확인.
+
+#### 운영 메모
+- 단말에서 ssh 로 `pgrep -f "cg-streamer --run"` 처럼 패턴을 명령줄에 포함하면 ssh 로 실행한 셸 자신이 매칭돼서 `start.sh` 가 "이미 실행 중"으로 오인해 시작을 건너뜀(실제로 스트리머가 안 뜬 채 지나갈 뻔함). 확인할 때는 `ps -eo pid,etime,args | grep "[.]/cg-streamer"` 처럼 쓸 것.
+- 비대화형 ssh(비밀번호)가 필요하면 `SSH_ASKPASS` 스크립트 + `SSH_ASKPASS_REQUIRE=force` 로 가능(sshpass 없는 Windows Git Bash).
+- 단말의 `bin/cgsetup.cfg`, `bin/project/가로스크롤-예제.json` 에 로컬 수정이 남아 있음(의도 확인 필요).
+- 페이지 전환(`next` 명령) 테스트 중 로그에 `*** stack smashing detected ***` 가 한 번 찍힘(프로세스는 계속 동작). 원인 미확인 — 재현되면 추적.
+
+### 2) 로컬 HDMI 화면 해상도 맞춤 + 로컬 HDMI 로도 음성 재생
+
+
+#### 로컬 화면(HDMI 2) 해상도가 안 맞던 문제 (`bin/start.sh`)
+- 증상: output=3(HDMI+UDP)에서 로컬 모니터에 화면이 잘려 나옴. 원인: HDMI-2 모니터는 1024x600 모드인데 X 화면(프레임버퍼)은 1920x1080 이고, 미리보기 창(`PreviewLoop`)은 X 화면 크기로 만들어져 왼쪽 위 1024x600 만 보였음. 기존 `xrandr` 모드 설정은 스트리머가 뜬 *뒤* 키오스크 단계에서만 해서 늦었음.
+- 수정: 스트리머 시작 *전에* 연결된 첫 출력의 권장(첫) 모드 적용 + 연결 안 된 출력 `--off` + `xrandr --fb <모드>` 로 X 화면 크기도 맞춤. 모니터가 바뀌면 그 모니터 권장 해상도로 자동 적용(`start.sh` 실행 시점에만 적용, 이후 모니터 교체는 stop/start 필요). 다른 모니터(1920x1080 전용)로 바뀐 뒤에도 미리보기 창이 1920x1080 으로 맞게 시작됨.
+- 송출은 1920x1080 고정이라 1024x600(1.71:1) 모니터에서는 가로가 약 4% 늘어남(비율 유지 레터박스는 미구현).
+
+#### 로컬 HDMI 로도 음성 재생 (output=3, `cgsetup.cfg audio_out`)
+- 이전까지 음성은 AAC 로 TS(UDP)에만 들어가고 로컬 HDMI 에는 안 나갔음. `AudioMixer` 가 송출용으로 만든 같은 믹스(영상 mp4 음성 + HDMI 입력 음성)를 ALSA 재생 장치로도 내보내도록 추가(`LocalRun` 스레드: 블록 큐 → `snd_pcm_writei`, libasound dlopen, 장치 없음/에러 시 닫고 재시도, 큐는 8블록 상한으로 송출을 막지 않음).
+- 설정: `cgsetup.cfg` 의 `audio_out` = `auto`(기본, output=3 일 때 연결된 HDMI 커넥터의 소리 카드: HDMI-A-1→`rockchiphdmi0`, HDMI-A-2→`rockchiphdmi1`) / `off` / ALSA 장치명.
+- 구현 중 버그 2건: (1) 음성 설정을 `LoadSetupCfg` 이전에 읽어 항상 꺼져 있었음 → 로딩 이후로 이동. (2) printf 문자열 개행 이스케이프 오류로 빌드 실패.
+- 검증: 단말에서 `[audio] 로컬 출력 시작: plughw:CARD=rockchiphdmi1,DEV=0` 로그 확인, HDMI 캡처 반복 로그 없음. 실제 소리/지연(영상 대비)은 사용자 확인 필요.
+- 운영 메모: 단말의 `bin/cgsetup.cfg`(udp_ip=10.10.10.11)처럼 로컬 수정이 있으면 `git pull` 이 막히므로 `git stash` → `git pull` → `git stash pop` 사용.
+
+### 3) 해상도 재설정 명령 (Reload / Switch project 에 포함)
+
+
+- 배경: 해상도 자동 설정이 `start.sh` 실행 시점에만 돼서, 스트리머를 켜 둔 채 모니터를 바꿔 꽂으면(`xrandr --fb` 로 고정된 X 화면 + 시작 시 한 번 만든 미리보기 창) 반영이 안 됨.
+- `bin/display.sh` 신설: 연결된 첫 출력의 권장 모드 적용 + 연결 안 된 출력 `--off` + X 화면 크기(`--fb`)를 같게(커지는 경우/작아지는 경우 모두 되도록 fb→모드→fb 순서로 시도). `start.sh` 가 스트리머 시작 전에 `bash ./display.sh` 로 호출(기존 인라인 코드를 이 스크립트로 이동). `.gitignore` 에 `!bin/display.sh`.
+- cg-streamer(`ApplyDisplay`): 별도 스레드에서 `display.sh` 를 실행한 뒤 현재 X 화면 크기를 읽어 **미리보기 창 크기와 다르면** `PreviewLoop` 를 다시 돌려 창/버퍼를 새 크기로 재생성(`PreviewRun` 이 true 를 반환). 같은 크기면 아무것도 안 해서 화면 깜박임 없음. 송출(인코딩/UDP)은 끊기지 않음.
+- 호출 시점: **Reload saved project**(`POST /reload`), **Switch project**(`POST /switch`) 때 자동 + 단독 명령 `POST /display`(에디터 `/ctl/display` 중계로도 가능). 에디터 UI 는 변경 없음(기존 두 버튼이 같은 엔드포인트를 씀).
+- 검증(단말): 해상도를 일부러 1280x720 으로 바꿔 둔 뒤 `POST /display`·`/reload` → 1024x600(연결된 모니터 권장)으로 복귀. 화면 크기가 달라지는 경우 `[display] 화면 크기 변경 1280x720 -> 1024x600: 미리보기 창 다시 만듦` 로그와 함께 창이 새 크기로 재생성됨.
+- 한계: 모니터를 바꿔 꽂은 뒤 **Reload/Switch project(또는 /display)를 눌러야** 반영됨(핫플러그 자동 감지는 아님). Chromium 키오스크 창 크기는 이 경로로 갱신하지 않음.
+
+### 4) Output Stream Control 이 적용 중인 프로젝트를 보여줌, 마지막 적용 프로젝트로 시작, 첫 실행은 빈 프로젝트
+
+
+- **엔진 상태에 `file` 추가**: `GET /status` 응답에 현재 적용된 프로젝트 **파일 이름**(.json 제외)을 `file` 로 넣음(프로젝트 안의 `name` 은 파일명과 다를 수 있음: 예 파일 `생활정보-문자방송` ↔ name `생활정보 문자방송`). 적용된 프로젝트 파일이 없으면 `file` 은 생략.
+- **Output Stream Control (`stream-control.tsx`)**: 콤보박스를 `status.file` 로 선택해 보여 줌. 이전에는 목록의 첫 항목(가나다순)을 임의로 골라 실제 송출 중인 프로젝트와 달랐음. 사용자가 직접 고르기 전까지는 엔진 쪽 변경(다른 곳에서 Switch, 재시작)도 따라가고, Switch project 후 다시 엔진을 따라감. 적용된 프로젝트가 없으면 `(no project applied)` 로 비워 둠.
+- **마지막 적용 프로젝트 기록**: Switch project 성공 시 `bin/.run/last-project` 에 파일 이름 기록. `bin/start.sh` 는 `CG_PROJECT` 가 없으면 이 기록으로 시작(이전엔 항상 `자막프로젝트`). **기록이 없는 첫 실행이면 빈 프로젝트**(없는 파일 `project/.none.json` 을 주어 엔진 대기 상태 `{"ready":false}`)로 시작. 기록된 파일이 사라졌어도 빈 프로젝트.
+- **대기 상태에서 Switch/Reload 가 안 되던 버그**: 프로젝트 없이 뜬 플레이어는 프레임 루프가 안 돌아 `cg.cmd("reload")` 로는 시작되지 않음(status 계속 `ready:false`, paint=0). 대기 상태(`"ready":true` 가 상태에 없음)일 때는 `location.reload()` 로 페이지를 새로 불러오도록 함(`ReloadJs`).
+- **에디터 기본 탭**: Timeline / Playback 창의 기본 탭을 `Timeline` → **`Output Stream Control`** 로 변경(`page.tsx` 의 `playTab` 초기값). 에디터는 원래 빈 프로젝트(`initial()`, 빈 페이지 4장)로 시작하므로 처음 열면 이 탭이 보임.
+- 검증(단말): 기록 삭제 후 시작 → `{"ready":false}`(빈 프로젝트) → Switch `생활정보-문자방송` → ready:true, `last-project` 기록 → 재시작하면 기록된 프로젝트로 시작. 확인 후 `자막프로젝트` 로 되돌려 둠.
+- 주의: 이 변경 이후 `last-project` 기록이 없는 단말을 재시작하면 빈 프로젝트(대기)로 뜸. 기존처럼 `자막프로젝트` 로 시작하려면 한 번 Switch project 로 지정하거나 `CG_PROJECT=자막프로젝트 ./start.sh`.
+
+### 5) 하단 자막(crawl) 끊김 원인 측정과 수정: 프레임 시간을 균일 간격으로
+
+
+- 증상: 가로 스크롤 하단 자막이 "툭툭" 끊김. 웹 검색(캔버스 서브픽셀/정수 스냅, rAF delta time, CEF OSR 프레임 누락)으로 후보를 정리한 뒤 **단말에서 직접 측정**해 원인 확정.
+- 측정 도구: (1) `[stat]` 에 OnPaint 도착 간격 진단 추가(`gap_max`, `late25`=25ms 초과 횟수, `big100`=100ms 초과 횟수). (2) 송출 TS 를 단말로 받아(`CG_UDP=10.10.10.56:1234`) 자막 줄의 가로 띠(1660x6)를 프레임마다 잘라 인접 프레임 간 이동량을 SAD + 포물선 보간으로 추정(평균/표준편차/평균에서 1px 넘게 벗어난 프레임 비율).
+- 결과 1 — **CEF 프레임 전달은 문제 아님**: OnPaint 간격이 대부분 20~25ms, 가끔 한 프레임이 25~38ms 늦음(`late25` 초당 0~1회), 100ms 넘는 멈춤 0회(`big100=0`), `drop=0`. 포럼에 보고된 250ms 멈춤(VideoCaptureOracle)은 이 단말에서 재현되지 않음.
+- 결과 2 — **원인은 시간 진행의 불균일**: 페이지가 `requestAnimationFrame` 타임스탬프 차이(`now - lastT`)를 그대로 더해 위치를 계산하는데, 이 간격이 프레임마다 들쭉날쭉해서 프레임 간 이동량이 3.0/4.2/2.9/4.4 처럼 번갈아 튐(표준편차 0.81px, 평균에서 1px 넘게 벗어난 프레임 11.7%).
+- 시도했다가 되돌린 것: crawl 위치를 정수 픽셀로 스냅만 한 경우 효과 없음(3.66px/프레임이 3,4,3,4 로 번갈아 움직여 오히려 불규칙).
+- 수정(`bin/web/cg-runtime.js`): **SMOOTH_DT** — 프레임 간격을 이동평균(`framePeriod`)으로 추정해 가상 시계를 균일하게 진행시키고, 실제 시계와의 차이를 2%씩만 서서히 보정(크게 어긋나면 재동기). 같은 조건에서 표준편차 0.81 → 0.53px, 튄 프레임 11.7% → 2.6%, 이동량 3.4~3.9px 로 고르게.
+- 옵션 **INT_STEP**(프레임당 정수 픽셀 crawl)도 구현·측정: 표준편차 0.43, 튄 프레임 1.6%, 이동량 3.9~4.1px 로 가장 균일하지만 속도가 3.66→4px/프레임(약 +9%)으로 달라져 자막이 끝나는 시각이 앞당겨짐. 기본은 끄고(`INT_STEP=false`) 속도를 바꾸지 않는 SMOOTH_DT 만 켬. 더 균일해야 하면 `INT_STEP=true` 로 바꾸면 됨(상수 한 줄).
+- 부수 개선: 텍스트 캐시(`cachedTextCanvas`)가 매 프레임 `JSON.stringify` 로 시그니처를 만들던 것을, 같은 항목 객체이고 글자·runs 가 같으면 건너뛰도록 변경(CPU/GC 부담 감소).
+- 한계/참고: 자막 시작 직후 약 10프레임은 측정에서 제외해도 되는 구간(자막이 아직 안 움직임). 측정은 8~9초 단일 구간이라 장시간 변동(수 초마다의 멈칫)은 `[stat]` 의 `gap_max`/`late25` 로 계속 볼 수 있음.
+
+### 6) HDMI 2 로컬 화면 "툭툭": 미리보기 62.5Hz 타이머 버그 수정 + 스레드 SCHED_FIFO
+
+
+- 배경: 송출 영상(TS)의 자막 이동량은 SMOOTH_DT 로 고르게 됐는데도(앞 항목) "별 차이 없다". 사용자가 보는 곳은 **HDMI 2 로컬 화면(output=3 미리보기)**이었음 -> 송출 TS 가 아니라 로컬 표시 경로를 점검.
+- **원인 1 — 미리보기 타이머가 62.5Hz**: `PreviewLoop` 가 `std::chrono::milliseconds(1000 / g_fps)` = 16ms 주기로 그림(60fps 의 정수 ms 내림). 로그의 `[preview-stat] drawn=63/s` 가 증거. 모니터는 60Hz 라 초당 2~3번 프레임이 겹치거나 건너뛰어 규칙적인 "툭툭"으로 보임.
+- **수정 1**: 타이머 대신 **인코더가 새 프레임을 만들 때마다**(`EncodeLoop` 가 `g_pv_seq` 증가 + `condition_variable` 통지) 미리보기가 한 장씩 그림 -> 정확히 초당 60장(`drawn=60/s`). 대기는 50ms 마다 깨어 종료/해상도 변경(창 재생성)을 확인.
+- 진단 추가: `[preview-stat]` 에 `draw_gap_max`(그린 시각 사이 최대 간격 ms). `[stat]` 의 `gap_max/late25/big100`(OnPaint 도착 간격)와 함께 본다.
+- **스레드 SCHED_FIFO** (`src/cg-streamer/rt.h` `SetRealtime`): cg-encode 50, cg-preview 49, cg-audio 48, cg-hdmirx 48, cg-hdmi-aud 48, cg-audio-out 47. 권한이 없으면(RLIMIT_RTPRIO=0) 한 번만 안내하고 일반 스케줄링으로 계속 동작. CEF 렌더러/컴포지터 스레드는 그대로 둠. 실시간 스레드는 모두 대기(sleep/wait) 위주라 기아 위험이 낮고 커널 RT 스로틀(95%)이 안전망.
+- **권한 부여(단말, 1회)**: `sudo sh -c 'echo "pi - rtprio 90" > /etc/security/limits.d/99-cg-rt.conf'` 후 **다시 로그인**해야 적용(`ulimit -r` 이 90 으로 보임). `bin/start.sh` 는 `ulimit -r` 이 0 이면 안내를 출력. setcap 은 CEF 하위 프로세스/라이브러리 경로(AT_SECURE) 때문에 쓰지 않음.
+- 검증(단말): 로그 `[rt] cg-encode: SCHED_FIFO 50` 등 6개, `ps -L` 에서 해당 스레드가 `FF`(FIFO) 우선순위 50/49/48/47 로 표시. 미리보기 `draw_gap_max` 는 보통 18~19ms(이전 타이머 방식은 `drawn=63/s`, 틱 간격 어긋남). 주관적 부드러움은 사용자 확인("지금 잘되는 것 같다").
+- 주의: 확인용 ssh 명령 문자열에 `cg-streamer --run` 같은 패턴을 쓰면 `start.sh` 의 `pgrep -f` 가 그 셸을 스트리머로 오인해 시작을 건너뜀(이번에도 한 번 발생, 로그만 보고 정상으로 착각할 뻔함). 확인할 때는 스크립트 파일로 올려 실행하거나 `ps -eo pid,args | grep "[.]/cg-streamer"` 사용.
+
+### 7) 그룹으로 묶은 개체 중 하나만 선택/편집 (Alt+클릭, 더블클릭)
+
+
+- 증상: `가로스크롤-예제` 하단 자막(여러 개체)을 그룹으로 묶자, 그 안의 crawl 이 걸린 개체의 속성/효과를 따로 설정할 수 없음. 원인: 그룹은 `groupId` 로 묶이고 `selectedIds` 가 멤버 하나를 클릭해도 **그룹 전체를 선택**, 속성 변경(`patch`)은 선택된 모든 멤버에 적용됨.
+- 수정(에디터): 그룹을 무시하고 **그 개체 하나만** 선택하는 방법 추가. `selectedIds(..., single)`, `select(id, toggle, single)`.
+  - 캔버스: **Alt+클릭** 또는 **더블클릭**(그룹 멤버 / 글자 개체는 편집 모드 진입과 함께 그 개체만 선택).
+  - 타임라인: 개체 아이콘 **Alt+클릭**, 막대를 **Alt+드래그**하면 그 개체만 이동/조절(그룹 동료는 같이 움직이지 않음).
+  - 일반 클릭은 이전처럼 그룹 전체 선택(이동/복사 등 그룹 동작 유지). 도움말에 사용법 한 줄 추가.
+- 참고: 그룹 해제 없이도 개체별 Effects(Crawl 등) 설정 가능. Windows 브라우저에서 Alt 를 눌렀다 떼면 메뉴바가 활성화될 수 있어 불편하면 더블클릭을 쓰면 됨.
+
+### 8) Effects 번호(001~)가 뭐가 다른지 표시
+
+
+- 증상: Effects 탭의 효과별 번호 버튼(001~015)이 번호만 있고 무엇이 다른지 알 수 없음(Cut/Fade/Curl/Tile/Banner/Text/Crawl/Roll 은 미리보기가 비어 있음. 색 문제가 아니라 내용이 없었음).
+- 조사(`effects.ts` `visual()` 기준 번호의 실제 의미):
+  - Move: 001~004 좌/우/상/하에서 들어옴, 005~008 모서리(오른쪽 위/왼쪽 위/오른쪽 아래/왼쪽 아래)에서 대각선, 009~012 는 005~008 과 같음.
+  - Scale: 001~004 좌/우/상/하 끝 기준, 005 가로로만, 006 세로로만. Wipe/Banner/Curl: 번호%8 이 모양(좌/우/상/하/가운데 가로/가운데 세로/대각 2종), 009 이상은 앞 번호와 같은 모양. Banner 는 번호 홀짝으로 기울기(±8°), Curl 은 말림. Organic: 번호%3 = 사각형/가로 조각/원 + 번호마다 무작위 순서. Tile: 번호%3 = 동시/대각선/무작위.
+  - **Crawl/Roll/Text**: 번호(`effectPreset`)는 아무 영향이 없고 방향만 바뀜. Crawl 은 왼쪽/오른쪽(위/아래는 왼쪽으로 처리), Roll 은 위/아래만 의미 있음.
+- 수정(`effects.ts` `presetInfo/presetCount/presetDirection`, `attributes.tsx`): 번호 버튼마다 **기호 + 짧은 글자 + 마우스를 올리면 나오는 설명(title)**. 의미 없는 번호는 정리: Crawl 2개(←/→), Roll 2개(↑/↓), Text/Cut/Fade/Blink 1개. 번호를 누를 때 방향도 효과에 맞게 지정(Crawl: 좌/우, Roll: 상/하).
+- 기존 프로젝트: 저장된 `effectPreset`/`direction` 값은 그대로라 재생은 달라지지 않음(Crawl/Roll 에서 정리된 번호 밖 값은 번호 버튼 강조만 안 보임).
+
+### 9) Effects 시간 항목 이름 변경 (Duration/Length/Begin)
+
+
+- 혼란: `Duration`(효과가 진행되는 시간)과 `Length`(개체가 화면에 떠 있는 전체 시간)가 둘 다 "시간 길이"로 읽혀 구분이 안 됨, `Begin` 도 무엇의 시작인지 불분명.
+- 변경(`attributes.tsx` 라벨만, 저장 필드명 `inDuration/outDuration/start/duration` 은 그대로라 기존 프로젝트 호환): **Duration → In Duration / Out Duration**(위의 In/Out 선택에 따라 바뀜; 처음엔 In Time/Out Time 으로 했다가 요청으로 Duration 유지), **Length → Show Time**, **Begin → Start Time**. Speed 유지. 각 항목에 마우스를 올리면 설명(title) 표시, 도움말에도 설명 추가.
+- Crawl/Roll 은 In/Out 시간을 쓰지 않으므로(진행이 Show Time 전체에 걸쳐 0→100%) 해당 효과를 선택하면 In/Out Duration 입력을 비활성화하고 툴팁에 안내.
+
+### 10) Attributes 가운데 칸(Name/자막 내용) 폭 축소
+
+
+- Attributes 탭 가운데 칸(`.textproperties`: Name 입력, 자막 내용 입력, 선택 안내 + 전체 적용 버튼)의 폭을 `flex:0 0 239px` → **140px** 로 줄임(`globals.css` 마지막 덮어쓰기 규칙). 줄어든 폭은 나머지 칸이 가져감. 안내 문구는 줄바꿈되어 표시. Font 칸(`.fontproperties`)도 `285px` → **250px** 로 조금 줄임. 오른쪽 색 대상 버튼(F/E-1/E-2/E-3/S, `.facebuttons`)은 줄바꿈을 막고 한 줄로 배치: 5개를 **같은 너비**(`flex:1 1 0`)로 칸 끝까지 채우고 간격 2px(색 띠 10→5px, 칸 최소 폭 140px). `space-between` 은 버튼 너비가 제각각이라 되돌림. 각 버튼에 마우스를 올리면 의미 설명(툴팁): F=Face(글자 면), E-1/E-2/E-3=Edge 1~3(바깥으로 겹쳐 두르는 3중 테두리, 두께 0이면 안 보임), S=Shadow(그림자). 더 줄이거나 늘리려면 같은 줄의 `140px`/`250px` 만 바꾸면 됨.
+
+### 11) 마우스 드래그 범위 선택(큰 개체 위에서도), 그룹 묶기/해제, 색 버튼 설명
+
+
+- 증상: 여러 개체를 마우스로 드래그해 선택하고 싶은데 안 됨. 원인: 범위 선택(marquee)은 **빈 배경(`bg`)에서 눌렀을 때만** 시작되는데, `가로스크롤-예제` 처럼 영상/배경 개체가 화면 전체를 덮으면 빈 곳이 없음.
+- 수정(`editor-canvas.tsx`): 화면을 덮는 개체(`bgLike`: 영상 / 고정 / 잠금 / 면적이 화면의 60% 이상)는 **선택되어 있지 않을 때** 그 위에서 드래그하면 개체 이동 대신 범위 선택이 시작됨. 마우스를 떼면: 범위가 있으면 선택(덮는 개체는 선택 대상에서 제외), 거의 안 움직였으면(클릭) 그 개체가 선택됨. 이미 선택된 덮는 개체는 전과 같이 드래그로 이동. 더블클릭/Alt+클릭은 기존 동작.
+- **Shift/Ctrl+드래그**는 기존 선택에 추가(합집합). 선택 후 기존 그룹 묶기 버튼(Ctrl+G)/그룹 해제 버튼(Ctrl+Shift+G)을 그대로 사용(코드 변경 없음).
+- 도움말(사용 방법)에 범위 선택·추가 선택·그룹 방법, 단축키 목록(`드래그 / Shift·Ctrl+드래그`), 색 설정 F/E-1/E-2/E-3/S 의 의미(Face / Edge 1~3 / Shadow)를 추가. 색 버튼은 글자로 풀어 쓰면 칸을 벗어나므로 이름은 그대로 두고 툴팁 + 도움말로 설명.
+- 우클릭 컨텍스트 메뉴 항목에 아이콘 추가(lucide): 복사(Copy) · 붙여넣기(ClipboardPaste) · 그룹(Group) · 그룹 해제(Ungroup) · 화면 전체 크기로(Maximize2) · 배경객체 고정(Pin) · 위치 고정 해제(UnlockKeyhole) · 숨기기(EyeOff) · 삭제(Trash2) · 닫기(X). 항목은 [이름, 동작, 아이콘] 으로 정의.
+- 참고: 화면 60% 이상을 차지하는 개체는 드래그 이동이 막히므로(먼저 클릭해 선택하면 이동 가능) 위치는 Attributes 의 X/Y 로도 바꿀 수 있음.
+
+### 12) 페이지 모드(Still/Roll/Crawl) 설정 위치와 동작을 도움말에 추가
+
+- 질문: 페이지의 Still/Roll 설정은 어디서 하나. 위치: **Timeline 탭 툴바**, 전체 길이(초) 입력 옆의 "페이지 모드" 콤보박스(`Still`/`Roll`/`Crawl`/`MultiLayer`, `timeline.tsx`). 기본 탭이 Output Stream Control 이라 Timeline 탭을 먼저 눌러야 보임.
+- 동작(`model.ts effectState`): Still = 개체별 Effects. Roll/Crawl = `background` 가 아닌 **모든 개체**가 효과와 무관하게 세로/가로로 흐름(진행은 개체 Show Time 전체에 걸쳐 0→100%, 속도는 Speed). 우클릭 "배경객체 고정"을 적용한 개체는 제자리. MultiLayer 는 별도 스크롤 처리 없음(Still 과 같음).
+- 개체 하나만 흘리려면 Still 모드에서 그 개체의 Effects 를 Crawl/Roll 로 지정(`가로스크롤-예제` 방식).
+- 도움말(사용 방법)에 위 내용을 한 문단으로 추가.
+
+### 13) 모니터 두 대 구성과 자동 감지 (HDMI-1 = 데스크탑, HDMI-2 = 송출)
+
+- 요청: 모니터 두 대 중 HDMI-1 은 에디터/데스크탑, HDMI-2 는 송출(미리보기) 출력. 이전 `display.sh` 는 연결된 첫 출력 하나만 설정하고 X 화면을 그 하나에 맞춰 두 대 배치를 깨뜨릴 수 있었음.
+- **최종 동작** (`bin/display.sh`, 한 번 재작성했다가 사용자 요청 "HDMI-1 은 제어하지 말고 HDMI-2 만 제어"로 축소):
+  - **송출 모니터(`output_display`, 기본 HDMI-2)만 제어**하고 다른 모니터(HDMI-1 등)의 켜짐/모드/위치는 건드리지 않음.
+  - 송출 모니터가 이미 켜져 있고 다른 모니터와 겹치지 않으면 아무것도 바꾸지 않고 영역만 읽음. 꺼져 있거나(연결만 됨) 겹쳐 있으면(모니터를 꽂을 때 X 가 모두 0,0 에 겹쳐 놓음) HDMI-2 만 권장 모드로 켜서 다른 모니터들의 **오른쪽**에 둠. X 화면은 모자랄 때 키우기만 함(줄이지 않음).
+  - 결과 영역을 `bin/.run/display-output.geom`("x y w h")에 기록. `display-editor.geom` 은 에디터 모니터의 현재 영역(읽기 전용, 키오스크를 켰을 때만 사용). mawk 에서도 되도록 `split` 만 사용.
+  - 가짜 `xrandr` 로 정상 배치 / 연결 때 겹침 / HDMI-2 꺼짐 / 한 대만 연결 경로를 시험: 정상·한 대일 때 `xrandr` 변경 호출 없음, 겹침·꺼짐일 때 HDMI-2 와 화면 크기 확대만 호출(HDMI-1 은 한 번도 언급 안 됨).
+- **cg-streamer**: 미리보기 창을 `display-output.geom` 위치/크기(송출 모니터)에 만들고, 송출 모니터가 없으면 창을 띄우지 않음(데스크탑을 덮지 않도록). 로컬 음성(`audio_out=auto`)은 `output_display` 모니터의 소리 카드(HDMI-A-N → rockchiphdmi(N-1))를 우선, 없으면 연결된 첫 HDMI, 하나도 없으면 재생 안 하고 대기. 모니터 구성이 바뀌면 `ChangeLocalOut` 으로 실행 중에 장치 전환.
+- **모니터 연결 변경 자동 감지** (`DisplayWatch` 스레드): HDMI-A-1/2 의 `status` 와 **EDID 내용**을 0.5초마다 읽어 1.5초 동안 안정되면 `display.sh` 재실행 + 미리보기 창 재생성 + 로컬 음성 장치 전환. EDID 를 신호에 넣은 이유: 두 모니터를 서로 바꿔 꽂아도 포트가 계속 connected 로 보일 수 있음. reload/Switch project/`POST /display` 에서도 같은 배치 재계산.
+- **에디터 키오스크**(기본 `editor_kiosk=off`, `kiosk.sh start|stop|restart|restart-if-running`): 에디터는 데스크탑 브라우저로 직접 접속하는 것을 기본으로 함. 켤 경우: 프로필 폴더를 사용자별(`/tmp/cg-editor-kiosk-<user>`)로(root 가 만든 폴더 때문에 pi 계정에서 안 뜨던 문제), pid 파일 대신 프로필 폴더(`--user-data-dir`) 기준으로 찾고 종료(브라우저 래퍼가 실제 Chromium 을 자식으로 띄워 pid 가 안 맞음), `setsid` 로 ssh 세션과 분리, 작은 모니터(1024x600)용 `editor_scale=auto` 배율과 `--lang=ko-KR`/번역 끔 추가(화면에서 효과는 확인 못 함: Chromium 은 GPU 렌더링이라 `x11grab` 캡처가 오래된 화면을 줌).
+- 설정(`cgsetup.cfg`): `editor_display`(기본 HDMI-1), `output_display`(기본 HDMI-2), `editor_scale`, `editor_kiosk`, `realtime`.
+- 확인 사항: 단말에서 모니터 포트를 여러 번 바꿔 꽂으며(HDMI-1 1920x1080 + HDMI-2 1024x600 두 대 연결 포함) 배치가 자동으로 다시 잡히는 것 확인. 재부팅 후에는 엔진/에디터가 자동으로 시작되지 않아 `start.sh` 를 직접 실행해야 함(부팅 자동 시작 설정 없음).
+- **송출 모니터만 연결했을 때 위쪽에 데스크탑이 보이고, HDMI-1 을 연결하면 HDMI-1 로 송출되던 문제**(모니터를 여러 번 바꿔 꽂으며 확인): 정식 창으로 바꾼 뒤(14번) 창 관리자가 일반 창을 패널 아래(작업 영역)로 밀어 `+0+27` 에 두어 위쪽 27px 에 데스크탑이 보이고 아래가 잘렸음. 전체화면(`_NET_WM_STATE_FULLSCREEN`)으로 바꾸니 두 모니터일 때 창 관리자가 **HDMI-1(첫 모니터)** 에 전체화면을 띄워 HDMI-1 로 송출됨. 최종: 창 종류를 **`_NET_WM_WINDOW_TYPE_DOCK`** + `_NET_WM_STATE_ABOVE/STICKY/SKIP_TASKBAR/SKIP_PAGER`, 장식 없음(`_MOTIF_WM_HINTS`) -> 작업 영역 제한 없이 요청한 모니터 위치/크기 그대로 배치.
+- **display.sh 버그 3건**(모니터가 바뀔 때 드러남): (1) 권장 모드를 "모드 목록의 첫 줄"로 골랐는데 4:3 모니터 등은 첫 줄이 권장이 아님 -> 모드 줄의 `+` 표시(권장) 우선, 없으면 첫 줄. (2) 그 awk 정규식 `/+/` 가 Debian 의 mawk 에서 컴파일되지 않아(`regular expression compile failed`) 권장 모드가 비어 기본값 1920x1080 으로 `xrandr --mode` 를 호출해 실패(두 출력이 `0,0` 에 겹쳐 두 모니터에 동시에 송출됨) -> `[+]`. (3) `xrandr` 로 모드를 바꾼 직후 바로 읽어 바뀌기 전 값이 기록됨 -> 실제 반영될 때까지(최대 4초) 기다린 뒤 기록.
+- **연결 변경 후 X 서버가 뒤늦게 배치를 덮어쓰는 문제**: 모니터를 꽂은 뒤 X 가 한참 뒤에 두 출력을 `0,0` 에 겹쳐 놓아 첫 계산 결과가 무효가 됨 -> `DisplayWatch` 가 감지 후 3초, 8초 뒤에 배치를 한 번씩 더 확인(이미 맞으면 아무것도 안 바뀜).
+- 참고: `src/cg-editor/AGENTS.md`, `CLAUDE.md` 는 사용자가 직접 삭제한 것(`38e9714` 에 삭제가 함께 올라감). 실수로 보고 `8b2f6a4` 에서 복원했다가 다시 삭제함. 앞으로는 `git add` 에 파일을 명시.
+
+### 14) 엔진을 올리면 마우스 클릭이 안 되던 문제: 미리보기 창이 원인(override_redirect)
+
+- 증상: `start.sh` 로 엔진을 올리면(output=3, 로컬 미리보기 켜짐) 데스크탑/브라우저에서 마우스 이동은 되는데 클릭이 안 됨. 엔진을 내리면 정상.
+- 원인 분리(단말에서 하나씩 빼며 사용자 확인 + 서버 쪽 측정):
+  - 정상: 엔진만(output=2, 미리보기 없음), 엔진 없이 빈 창만, 엔진 옆에서 별도 프로세스(python)로 만든 같은 속성의 창, X 연결만 열었다 닫는 경우.
+  - 안 됨: 엔진 안에서 `override_redirect` 창을 만든 모든 변형(맨 아래로 내림, 입력 안 받음, 그리기 생략, 감시 스레드 끔, 시작 40초 뒤 생성, 창 만든 뒤 연결 닫기, display.sh 생략). 즉 창을 그리는 내용/RGA/스케줄링/감시 스레드/마우스 장치와 무관.
+  - 서버 쪽 측정은 모두 정상이라 오해하기 쉬웠음: 실제 클릭이 시험 창에 도착, 가짜 클릭이 패널 메뉴를 엶, X 왕복 지연 최대 10ms, 화면 갱신(깜박이는 창) 정상, 메모리/CPU 압박 없음, 합성 매니저 꺼짐.
+- 해결: 미리보기 창을 **창 관리자(xfwm4)가 관리하는 정식 창**으로 변경(`override_redirect` 제거). 위치/크기는 `XSetWMNormalHints`(USPosition|USSize)로 송출 모니터 영역을 요청하고, 기본은 `_MOTIF_WM_HINTS`(장식 없음) + `_NET_WM_STATE_ABOVE/SKIP_TASKBAR/SKIP_PAGER` 로 제목 표시줄 없는 창. 창 관리자가 정한 실제 크기에 맞춰 그림. `CG_PV_STYLE=title`(제목 표시줄 있음)/`override`(예전 방식, 문제 재현용)로 바꿀 수 있음.
+- 결과: 엔진 + 미리보기(HDMI-2 1024x600+1920+0)가 떠 있어도 마우스 클릭 정상(사용자 확인 + 패널 메뉴 클릭 측정).
+- 부수 변경: `cgsetup.cfg` `editor_kiosk=off`(기본: 에디터 키오스크를 띄우지 않고 데스크탑 브라우저로 접속), `realtime=off`(SCHED_FIFO 기본 꺼짐), `display.sh` 는 **송출 모니터(HDMI-2)만 제어**하고 HDMI-1 은 건드리지 않음(송출 모니터가 없으면 미리보기 창도 안 띄움), 모니터 연결 변경 감시는 EDID 포함. 키오스크 종료는 pid 파일 대신 프로필 폴더 기준(`kiosk.sh`).
+- 교훈: (1) 단말 ssh 명령 안에 `pkill -f "패턴"` 을 쓰면 그 명령줄 자신(셸)에 매칭되어 자기 자신을 종료시킴 -> `[p]attern` 형태로 쓰거나 별도 스크립트로. (2) 같은 패턴 문제로 `start.sh` 의 `pgrep -f "cg-streamer --run"` 도 오인함. (3) 에디터 Chromium 은 GPU 렌더링이라 `x11grab` 캡처가 오래된 화면을 줄 수 있어 화면 캡처로 판단하면 안 됨.
+
+### 15) 데비안 데스크탑에서 한글 입력 (fcitx5 + hangul, 에디터 포함)
+
+- 요청: 이 보드(Debian 11 XFCE)에서 한글 입력, 에디터에서도 한글 입력. 시스템 로케일은 바꾸지 않음(`LANG=C.UTF-8` 유지).
+- 시작 상태: 입력기는 `ibus`(중국어 병음만)뿐, 한글 글꼴 없음(중국어 WenQuanYi 만). 세션은 `GTK_IM_MODULE=ibus` 로 시작되어 있었음.
+- 설정: `fcitx5`, `fcitx5-hangul`, GTK2/GTK3/Qt5 연동, 설정 도구, `fonts-nanum` 설치 -> `im-config -n fcitx5`(`~/.xinputrc`) -> `~/.config/fcitx5/{profile,config,conf/hangul.conf}`(영문 us + 한글 hangul, 시작은 영문, 전환 키 한/영 키·Shift+Space·Ctrl+Space, 두벌식) -> 자동 시작 항목 -> Chromium 런처에 입력기 환경변수 직접 지정.
+- 한 번에 재현하는 스크립트 `bin/setup-hangul.sh`(여러 번 실행해도 안전)와 설명서(`readme-env.md` "한글 입력" 절)를 추가.
+- 에디터: 에디터는 브라우저(Chromium) 안의 웹 앱이라 브라우저에서 한글이 되면 자막 입력칸/캔버스 글자 편집 모두 됨. `bin/kiosk.sh`(에디터 키오스크)는 입력기 환경변수와 데스크탑 세션의 D-Bus 주소를 직접 넣어 줌(ssh 로 `start.sh` 를 실행하면 이 값이 없어 한글이 안 됨).
+- 진단 과정과 함정:
+  - 처음에 "한글이 안 된다"고 했던 것은 설정이 아니라 **이미 떠 있던 Chromium(예전 ibus 환경)에 새 창이 붙어서**였음. Chromium 은 같은 프로필의 기존 프로세스에 붙기 때문에 환경변수를 바꿔도 소용없음 -> 열린 창을 모두 닫고 새 환경의 런처로 열어야 함.
+  - "GTK 를 안 쓰는 빌드"로 오판할 뻔함: Chromium 은 GTK3 를 실행 중에 불러오므로 `ldd` 에 안 보임. `/proc/<pid>/maps` 에서 `libgtk-3.so`, `im-fcitx5.so` 로 확인.
+  - ssh 셸에는 D-Bus 세션 주소가 없어 `fcitx5-remote` 가 실패 -> `xfce4-session` 프로세스 환경에서 가져옴. fcitx5 5.0.5 의 `fcitx5-remote` 에는 `-n` 이 없음.
+- 검증: 새 환경(`GTK_IM_MODULE=fcitx` 등 + 별도 프로필)으로 띄운 에디터/시험 창에서 한글 입력 확인(사용자 확인). XIM 서버 `@server=fcitx`, fcitx5 가 `hangul`/`xim`/`xcb` 애드온 로드.
+- **한/영 키**: 사용하는 Logitech K370s 는 미국식 배열이라 한/영 키가 없음(키 입력을 직접 측정: 한/영 신호 없이 오른쪽 Alt 가 들어옴). fcitx5 전환 키 목록에 이미 `Hangul` 이 있으므로 XKB 옵션 `korean:ralt_hangul,korean:rctrl_hanja`(오른쪽 Alt = 한/영, 오른쪽 Ctrl = 한자)만 연결. 로그인마다 `~/.config/autostart/xkb-hangul.desktop` 로 적용, 지금 세션에도 즉시 적용. 한/영 키가 있는 키보드는 X 키코드 130 이 이미 `Hangul` 이라 그대로 동작.
+- 에디터 글자 편집 입력창 겹침: 편집용 입력창(`.inlineedit`)이 반투명이고 글자색이 개체 글자색이라 뒤의 캔버스 글자가 비쳐 겹쳐 보였음 -> 불투명 배경 + 흰 글자 + 한글 글꼴로 변경.
+- 남은 일: 지금 떠 있는 데스크탑 세션은 ibus 환경이므로 **로그아웃 후 다시 로그인**(또는 재부팅)해야 어떤 방법으로 열어도 한글이 됨. 그 전에는 바탕화면의 Chromium 아이콘(수정한 런처)으로, 열린 Chromium 을 모두 닫은 뒤 열기.
+
+### 16) HDMI-1/2 해상도가 이상하다·작아졌다·배율이 커졌다 (모니터 정보 EDID 없음) — 조사만, 해결은 보류
+
+- 증상(사용자): HDMI-1 해상도가 이상함(글자가 흐림) -> 해상도가 작아진 듯 -> 화면 배율이 커진 듯.
+- 확인(단말): 모니터를 여러 번 바꿔 꽂는 중 **HDMI-1/HDMI-2 모두 EDID 0바이트**(`/sys/class/drm/card0-HDMI-A-N/edid`)이고 커널이 본 모드도 0개. 이전에는 EDID 가 정상이었음(삼성 C27F390 `1920x1080` 권장, MPI `1024x600` 권장). EDID 가 없으면 X 서버가 일반 기본 목록(최대 **1368x768**: 1368x768, 1360x768, 1280x800, 1152x864, 1280x720, 1024x768 …)에서 고르고 "권장" 표시(`+`)도 없음 -> 두 출력 모두 `1368x768`. `xorg.conf.d/20-modesetting.conf` 에는 `NoEDID=true` 가 있으나 이것은 X 쪽 옵션이고 커널 sysfs 의 EDID 0바이트는 DDC 읽기 실패(또는 모니터 대기/변환기·분배기 경유)로 보임.
+- 설명: 해상도가 낮아지면(`1920x1080` -> `1368x768`) 같은 화면의 글자·버튼이 약 1.4배로 커 보이고, 모니터의 원래(native) 해상도와 다르면 흐려 보임. 에디터는 1600x900 이상 기준이라 `1368x768` 에서는 패널이 좁게 보임. (제가 배율을 바꾼 것이 아님; 키오스크 `editor_scale` 는 키오스크를 끈 상태라 무관.)
+- 시도: HDMI-1 에 1픽셀 줄무늬 시험 화면을 `1368x768`/`1360x768`/`1280x720`/`1024x768`/`1280x800` 로 10초씩 띄워 선명도 비교(시험 후 원래 `1368x768` 로 복원). 사용자는 "2번(`1360x768`)"을 적용해 보라고 했으나 곧 "정지"를 요청해 **적용하지 않음**. 결과적으로 HDMI-1 은 X 서버가 고른 값 그대로(제어하지 않음 방침 유지).
+- 방침/참고: 사용자는 "HDMI-1 은 제어하지 말고 HDMI-2 만 제어"를 요청했었음(13번). HDMI-1 해상도 고정이 필요하면 `cgsetup.cfg` 에 `editor_display_mode=<해상도>` 항목을 만들어 `display.sh` 가 연결 때마다 적용하게 하는 방안(미구현, 빈 값이면 건드리지 않음).
+- 남은 일(사용자 확인 필요): (1) 모니터를 껐다 켜거나 HDMI 선을 다시 꽂아 EDID 가 다시 들어오는지 확인 -> 들어오면 원래 해상도로 자동 복귀. (2) 계속 안 들어오면 `1920x1080`/`1280x600` 등을 `xrandr --newmode/--addmode` 로 직접 추가(**10초 뒤 자동 복원하는 안전 시험**으로) 후 `editor_display_mode` 로 저장. (3) 모니터 모델/원래 해상도(예: 1280x600 인지) 확인. (4) 에디터를 낮은 해상도에서 쓰려면 브라우저에서 Ctrl+마이너스(약 67%)로 줄이기.
+- 확인 도구: `xrandr --listmonitors`(현재 해상도), `sudo cat /sys/class/drm/card0-HDMI-A-N/edid | wc -c`(EDID 유무), `cat /sys/class/drm/card0-HDMI-A-N/modes`(커널이 본 모드), `xrandr --query`(X 모드 목록, `*` 현재 / `+` 권장).
+
+## 2026-10-01 (이어서 3) — 업스트림 병합, start.sh 기본 production, 패널 배치, stop.sh 보강
+
+### git 업스트림 받기 (충돌 해결)
+- 원격의 cg-editor 성능 개선 커밋(`a7a77b6`)을 `git pull --rebase --autostash`로 받음. 로컬 수정과 `page.tsx`/`stream-control.tsx`가 충돌.
+  업스트림(attrPatch 등 성능 개선, `document.hidden` 폴링 중단)을 기준으로 두고 로컬 변경분(`char-stylegrid`, 'Stream Control' 탭 이름·맨 앞 순서,
+  "Refresh list" 주석)만 다시 얹어서 해결. 충돌 마커 없음·`tsc --noEmit` 통과 확인.
+
+### cg-editor/start.sh 기본 모드를 production 으로
+- `./start.sh` → `npm start`(빌드 결과 `.next/` 사용, `./build.sh` 선행 필요). 개발 서버는 `./start.sh --dev`. `--prod`는 호환용으로 유지.
+- 도움말의 옛 `dist/` 표기를 `.next/`로 정정. `bin/start.sh`는 옵션 없이 호출하므로 자동으로 production 으로 뜸.
+- 포트는 `.env.production`의 `CG_EDITOR_PORT=8080`(에디터), 파일 서버 8081.
+
+### 패널 기본 배치 변경 (24칸 그리드, `panels.tsx` slots)
+- 윗줄: Pages 1~5 / Canvas 5~21 / Style Catalog 21~25. 아랫줄: Attributes 1~10 / Timeline·Playback 10~21(이전 10~20) / Color 21~25(이전 20~25).
+  → Color 폭이 Style Catalog와 같아지고, Timeline 오른쪽 끝이 Canvas 오른쪽 끝과 맞음.
+- Timeline 을 Canvas 와 완전히 같은 폭(16칸)으로 하려면 Attributes 를 4칸으로 줄여야 해서(내용 최소폭이 커 가로스크롤 발생) 보류.
+- Color 패널: R/G/B/A 입력을 팔레트 옆 세로 열에서 팔레트 아래 가로 한 줄로 이동(`.channels`). 레이아웃은 localStorage 에 순서만 저장되므로 슬롯 변경은 즉시 반영.
+
+### stop.sh: 8080 이 안 죽던 문제
+- 원인 1: `bin/stop.sh`는 원래 cg-editor 를 일부러 남겨두게 돼 있었음 → 이제 마지막에 `src/cg-editor/stop.sh`도 호출해 함께 종료.
+- 원인 2: `src/cg-editor/stop.sh`가 pid 파일에 의존했는데, `setsid` 때문에 파일 서버 pid 가 실제와 1 어긋나고(10707 vs 10706), 에디터는 리더(npm)만 먼저 죽고
+  자식(`next-server`)이 남아 "이미 종료됨"으로 오판. → 그룹 TERM + 에디터/파일 서버 포트를 잡은 프로세스 직접 종료(TERM 후 KILL)로 변경.
+- 종료 확인을 `fuser`가 아닌 `ss -ltn`으로 함: `fuser`는 다른 사용자(root) 프로세스를 못 봐서 root 서버가 살아 있는데도 "종료했습니다"라고 거짓 성공을 출력했음.
+  못 죽이면 `sudo ./stop.sh` 안내와 함께 종료 코드 1.
+
+### 교훈: root 로 띄운 서버/빌드의 소유권 충돌
+- 터미널에서 root 로 `build`/`start`를 하면 `.next/`, `.run/`, `bin/.run/`이 root 소유가 되어 이후 pi 로 `build.sh`가 `EACCES`(`.next/trace`)로 실패하고, `bin/start.sh`도 pid 파일을 못 씀.
+  해결: `sudo ./stop.sh` 후 `sudo chown -R pi:pi .next .run`, `bin/.run` 도 동일. 앞으로는 root 가 아닌 pi 로 `./start.sh` 사용.
+- 빌드를 다시 하면 이미 떠 있는 서버(옛 빌드를 메모리에 가짐)는 청크 해시 불일치로 화면이 깨지므로 **빌드 후 반드시 서버 재시작**.
+
+### 참고: Text Link
+- Attributes 창의 Text Link = 선택한 텍스트 객체를 외부 `.txt` 와 연결. File System Access API 지원 브라우저는 2초마다 파일 변경을 감지해 자동 반영,
+  미지원 브라우저는 선택 시점 1회만 읽음. 연결된 객체는 직접 편집 불가, `linkName`으로 cg-streamer `PUT /text/<linkName>` 갱신과도 연결됨.
+
+### 재생 패널 탭 변경 (Timeline / Playback 창)
+- 'Stream Control' 탭 이름을 **'Output Stream Control'**로 변경(`page.tsx`의 `playTab` 값과 탭 목록).
+- 'Stamp Playback'·'Global Animation Playback' 탭은 **삭제하지 않고 탭 목록에서만 숨김**. 관련 코드(`channels.tsx`의 `aux.controls`, `page.tsx`의 분기)는 그대로 남아 있어서,
+  다시 보이게 하려면 `page.tsx`의 탭 배열(`['Output Stream Control','Timeline','Playback','Run Setting', ...]`)에 두 이름을 되돌려 넣으면 됨(주석에 표시해 둠).
+- 탭 순서: Output Stream Control · Timeline · Playback · Run Setting. 기본 선택 탭은 그대로 Timeline.
+
+### Output Stream Control 에 "Output Project:" 라벨 추가
+- 프로젝트 선택 콤보박스 **왼쪽**에 `Output Project:` 라벨 추가(`stream-control.tsx`, `.stream-label`). 처음엔 상태 표시줄의 프로젝트 이름 앞에 넣었다가
+  요청으로 콤보 왼쪽으로 이동했고 상태 표시줄은 원래대로(`자막프로젝트 · Page 1/3 · …`).
+
+### 단축키 변경: F5 → Ctrl+F5 (미리보기)
+- 미리보기(처음부터 재생) 단축키를 F5 에서 **Ctrl+F5**(Mac 은 Cmd+F5)로 변경(`page.tsx` 키 핸들러 + 단축키 도움말 모달 문구). 처음엔 Shift+F5 로 바꿨다가 요청으로 Ctrl+F5 로 재변경.
+- 단독 F5 는 앱이 가로채지 않아 브라우저 기본 동작(새로고침)이 됨. Ctrl+F5 는 브라우저의 강제 새로고침 단축키이지만 `preventDefault()` 로 막아 미리보기만 실행됨
+  (입력창/텍스트 편집 중에는 핸들러가 무시되므로 그때는 브라우저 강제 새로고침이 동작).
+
+### Run Setting 안내 문구 → 도움말로 이동
+- Run Setting 탭 하단의 "Manual은 페이지 끝에서 멈춥니다. Skip으로 다음 페이지를 선택한 뒤 In을 누르세요." 문구를 삭제.
+- 도움말 모달에는 "Manual은 페이지 끝에서 멈춥니다." 한 문장만 추가(Effects 안내 문단 뒤). Skip/In 사용 안내는 도움말에 넣지 않음.
+
+### Style Catalog 견본 확장 (Color / Shape)
+- **Color 탭**: 24색 → 약 150색(`page.tsx`의 `catalogColors`, 기존 `palettes`를 앞에 두고 중복 제거 후 이어 붙임). 참고 화면(Chyron 계열 Color 목록)의 초록/노랑/주황/빨강/분홍/보라/파랑/청록/갈색/어두운 계열 단색을 옮김.
+  `palettes`는 Char/Shape 견본과 오른쪽 Color 창 팔레트도 쓰므로 건드리지 않고 Color 탭 전용 목록을 분리. 그리드 열 수 3열(넓은 화면 4열) → 6열(1650px↑ 8열).
+- **Shape 탭**: 8개 → 약 130개(`catalogShapes`). 지금 모델이 `rect`/`ellipse`(색·테두리·투명도·그림자)만 지원해서 그걸로 만들 수 있는 것만 추가:
+  굵은 띠(700×80)·중간 띠(28)·가는 선(6)·반투명 선(3), 원(300×300), 정사각/세로 사각형, 반투명, 흰 윤곽선, 글로우(그림자), 드롭섀도 변형 × 16색.
+  견본 미리보기도 가로세로 비율·투명도·테두리·글로우를 반영하도록 개선(이전엔 항상 12px 막대).
+- **도형 모델 확장 (그라데이션/줄무늬/둥근 사각형/테두리만/다각형)**: Item 에 선택 필드 4개 추가(`model.ts` `make()` 기본값 포함 → 저장/불러오기 때 보존, 기존 프로젝트는 기본값이라 영향 없음).
+  - `radius`(모서리 반경, rect) · `shapeKind`(다각형 이름: triangle/wedge/quarter/parallelogram/trapezoid/slant/diamond/pentagon/hexagon/chevron/blob/leaf)
+  - `gradient`: `linear:<각도>:<색1>:<색2>[:<색3>…]` 또는 `radial:0:<중심색>:<바깥색>`(각도는 CSS 와 같음: 0=위, 90=오른쪽, 180=아래; 색은 `#rrggbb[aa]` 만 허용)
+  - `stripe`: `<각도>:<굵기px>:<색>` — 단색/그라데이션 위에 덧그리는 줄무늬
+  - Framed Box 는 별도 필드 없이 `fill:'#00000000'`(투명)+`stroke`. 투명 채우기가 불러올 때 흰색으로 바뀌지 않도록 `normalizeProject`의 fill 검증을 8자리(#rrggbbaa)까지 허용.
+  - 공용 그리기 코드 `app/shapes.ts`(`shapePath`/`drawShape`/`shapeCss`)를 만들어 에디터 캔버스(`editor-canvas.tsx`의 rect/ellipse 분기를 Shape 하나로 교체, 히트 영역도 같은 경로)와 썸네일/카탈로그 미리보기가 같이 씀.
+  - **송출 쪽 `bin/web/cg-runtime.js`에도 같은 로직 이식**(`ITEM_DEFAULTS` 기본값, `SHAPE_POINTS`/`parseGradient`/`parseStripe`/`pathRounded`/`drawShape`). **shapes.ts 와 cg-runtime.js 는 한쪽을 고치면 다른 쪽도 같이 고칠 것.**
+  - 헤드리스 Chromium 에서 런타임 코드로 둥근 사각형·원 그라데이션·줄무늬·테두리만·다각형(wedge/quarter/hexagon/chevron)·글로우가 그려지는 것 확인.
+- **카탈로그**: Color 탭 끝에 그라데이션/줄무늬 견본 약 80개(위→아래·대각선·방사형·줄무늬·금속·가로 3색 등; 클릭하면 `fill`(대체 단색)+`gradient`+`stripe` 적용, 단색 견본을 누르면 gradient/stripe 초기화).
+  Shape 탭은 Rounded Rect/Framed Box/그라데이션 막대·원/글로우/줄무늬 및 Custom 다각형 12종 × 단색·그라데이션 견본 추가(총 약 400개), 라벨도 Box/Circle/Rounded Rect/Framed Box/Custom 으로 표시.
+- **한계**: 텍스트 객체는 `fill` 단색만 그리므로 그라데이션 견본을 텍스트에 누르면 대체 단색만 적용됨. Attributes 창에 radius/gradient/stripe/shapeKind 편집 UI 는 아직 없음(카탈로그로만 지정). 사각형 모서리 반경 외의 곡선 도형(Custom 곡선)은 다각형 근사.
+
+### Attributes 창에 도형 편집 칸 추가
+- rect/ellipse 선택 시 Attributes 탭 가운데 열 아래에 **Shape** 블록 표시(`attributes.tsx`의 `ShapeProps`): Radius(사각형, 다각형이 아닐 때) · Shape(None/다각형 12종) ·
+  Gradient(None/Linear/Radial, Linear 각도, 색 2~3개 + 추가/제거 버튼) · Stripe(체크, 각도·굵기·Alpha %·색). 값은 `gradient`/`stripe` 문자열로 다시 조합해 저장(알파 있는 색은 알파 유지).
+- 주의: 그라데이션이 켜져 있으면 `fill`(오른쪽 Color 창의 F)을 바꿔도 그라데이션이 우선이라 보이지 않음 → Gradient 를 None 으로 끄거나 Shape 블록의 색을 바꿔야 함.
+
+### Shape 카탈로그 정리 (한눈에 보이게)
+- 견본 수를 약 400 → 약 160개로 줄임(색 변형 축소, 중복 제거; Rounded Rect/Framed Box/그라데이션/Custom 종류는 모두 유지).
+- 격자 표시: Shape 탭 전용 `.shape-stylegrid`(4열, 1650px↑ 5열, 칸 높이 56px 고정). 이전엔 정사각형 견본이 행 높이에 잡히지 않아 줄끼리 겹치고 라벨(Box/Circle/Rounded Rect/Framed Box/Custom)이 가려졌음.
+  열이 패널 폭을 넘지 않도록 `minmax(0,1fr)` + 버튼 `min-width:0;overflow:hidden`.
+- 긴 막대 견본은 칸 폭의 80%, 높이 4~20px 로 표시하고 정사각/세로 도형은 비율을 유지(`page.tsx`의 견본 미리보기).
+- 헤드리스 Chromium(CDP)으로 실제 화면을 캡처해 확인하는 방법: `--remote-debugging-port` 로 띄우고 Shape 탭 클릭 후 `Page.captureScreenshot`.
+
+### Style Catalog > Page 탭에 기본 템플릿 13종 추가 (문자발생기 자주 쓰는 구성)
+- `app/templates.ts`(`builtinTemplates`)를 새로 만들고, Page 탭에 프로젝트 사용자 템플릿(`project.templates`) **앞에** 표시. 클릭하면 현재 페이지 내용이 템플릿으로 교체(기존 동작, 이름은 유지).
+  하단 자막 1줄 / 하단 자막 2줄(제목+내용) / 인터뷰 이름표 / 뉴스 속보 / 하단 가로 스크롤(crawl) / 타이틀(중앙) / 로고+시계 / 스코어보드 /
+  정보 박스(우측, 날씨) / 순위표 5위 / 자막방송(대사 2줄) / 장소+LIVE / 공지 박스(중앙). 띠는 wipe, 글자는 fade 인/아웃 기본 적용, 둥근 모서리(`radius`) 활용.
+- 표시: 2열 격자(`.page-stylegrid`), 썸네일 높이 64px 고정(이전 Shape 탭과 같은 행 겹침 방지), 썸네일 글자 배율 `Thumb`의 `k` 매개변수(카탈로그에서는 0.5).
+- 헤드리스 Chromium 캡처로 2열 격자·이름·썸네일 표시 확인.
+- 운영 메모: 이 보드는 cg-streamer(송출 중 CPU ~200%) + 메모리 3.9GB 로 `tsc`가 3분 이상 걸리고 메모리 부족(exit 137)으로 에디터/파일 서버까지 같이 죽을 수 있음.
+  타입체크/빌드는 송출을 멈춘 상태에서 하는 것이 안전. (`curl -X POST http://127.0.0.1:5555/quit` 로 cg-streamer 정지)
+- `bin/start.sh`: 에디터 포트를 환경변수 > cg-editor/.env.production(8080) > 5173 순으로 결정(이전엔 5173 고정이라 production 전환 후 키오스크가 빈 5173 을 열었음).
+
+### 에디터 포트를 설정(cgsetup.cfg)으로 관리
+- `bin/cgsetup.cfg`에 `editor_port=8080` 추가(cg-streamer 의 `LoadSetupCfg`는 모르는 키를 무시하므로 영향 없음). 우선순위: 환경변수 `CG_EDITOR_PORT` > `cgsetup.cfg editor_port` > `cg-editor/.env.production` > 5173.
+- `bin/start.sh`가 이 값을 읽어 에디터를 `./start.sh --port <값>`으로 띄우고 키오스크 주소·에디터 실행 여부 확인에도 사용. `bin/stop.sh`도 같은 규칙으로 포트를 구해 에디터 `stop.sh`에 전달.
+- 포트가 또 바뀌어도: `cgsetup.cfg`의 `editor_port`만 고치고 `bin/stop.sh` → `bin/start.sh`. 에디터 `start.sh`가 실제로 쓴 포트를 `.run/cg-editor.port`에 기록하고 `stop.sh`가 그 포트도 정리하므로,
+  설정을 바꾼 뒤 stop 해도 예전 포트의 서버가 남지 않음(8090 으로 띄운 뒤 설정 8080 상태에서 stop → 8090 종료 확인). `stop.sh`의 고정 포트(5173/8080) 강제 종료는 제거.
+- 파일 서버 포트 8081 은 아직 `app/files.ts`(`FILES_PORT`)에 상수로 박혀 있어 설정 대상이 아님(바꾸려면 코드 수정+재빌드 필요).
+
+### 운영 메모: 메모리 사용 현황 (보드 3.9GB, 스왑 없음)
+- 점검 시점 사용 약 2.1GB / 여유 154MB(캐시 제외 available 약 1.4GB). 묶음별 RSS(공유 메모리 중복 포함이라 합이 실사용보다 큼):
+  VS Code 서버+확장 ~1,056MB · cg-streamer(엔진·GPU·렌더러) ~1,009MB · Chromium 키오스크 ~886MB · Claude Code ~301MB · Xorg ~197MB · cg-editor(에디터+파일 서버) ~159MB · Codex 확장 ~144MB.
+- 앞서 `tsc`가 exit 137(OOM)로 죽고 에디터/파일 서버가 같이 종료된 원인. 빌드/타입체크 전에 cg-streamer 정지(~1GB 확보)·키오스크 Chromium 종료(~0.9GB 확보)하면 안전.
+  확인 명령: `ps -eo pid,user,rss,pmem,cmd --sort=-rss | head`, `free -m`.
+
+### bin/rebuild.sh 신설: 메모리 확보하며 에디터 빌드
+- `bin/rebuild.sh [--check]`: 실행 중이던 것(cg-streamer, 키오스크)을 기억 → `stop.sh`(송출·키오스크·에디터 정지) → `src/cg-editor/build.sh` → 원래 켜져 있던 것만 `start.sh`로 재시작. 빌드 실패 시에도 이전 빌드로 다시 띄움(종료 코드는 빌드 결과).
+- `bin/start.sh`에 `CG_SKIP_STREAMER=1` / `CG_SKIP_KIOSK=1` 환경변수 추가(해당 단계 건너뜀, rebuild.sh 가 사용). `.gitignore`에 `!bin/rebuild.sh`.
+- 효과: 송출·키오스크를 내린 상태에서는 빌드의 타입 검사가 5.6초에 끝남(송출 중에는 3분 이상 걸리거나 OOM). 이후 에디터 빌드는 `bin/rebuild.sh` 사용 권장.
+
+## 2026-10-01 (이어서 2) — cgsetup.cfg 신설, 가로스크롤 끊김 원인 추적 → 진짜 Mali GPU 가속 활성화
+
+### cg-streamer: cgsetup.cfg 로 송출 설정 분리
+- `bin/cgsetup.cfg` 신규(기본값 없으면 조용히 스킵): `output`(1=HDMI만/로컬 전체화면·인코딩 없음, 2=UDP만·기본, 3=HDMI+UDP 동시),
+  `udp_ip`/`udp_port`, `fps`(인코더 rc·EncodeLoop 틱·CEF 페인트 fps 공통 기본값, 기본 60). `--setup=경로`로 다른 파일 지정 가능,
+  커맨드라인 인자가 항상 cfg보다 우선.
+- `kFps` 상수를 런타임 변수 `g_fps`로 교체(여러 곳에서 치환), `g_paint_fps` 기본값도 `g_fps`에서 파생.
+- `.gitignore`에 `!bin/cgsetup.cfg` 추가(`bin/*` 예외).
+
+### CEF 자체 그리기 속도(SendExternalBeginFrame/EBF) 실험 — 효과 없음, 원인 아니었음
+- 가설: CEF 내부 60Hz 타이머와 EncodeLoop 60Hz 타이머가 서로 어긋나 프레임을 건너뛰어 가로스크롤이 끊겨 보이는 것 아닐까.
+- `CG_EBF`(`-DENABLE_EXTERNAL_BEGIN_FRAME=ON`) 빌드 옵션 추가: `windowless_frame_rate` 대신 `EncodeLoop` 틱에서 `SendExternalBeginFrame()`을
+  직접 호출. 구현 중 두 가지 실버그 발견·수정: (1) `!g_ready` 로딩 대기 중에도 BeginFrame을 계속 보내야 로딩이 끝남(안 그러면 영원히 교착),
+  (2) `SendExternalBeginFrame()`은 UI 스레드에서만 호출 가능 — `CefPostTask(TID_UI, ...)` + 중복 요청 방지 플래그로 수정.
+- 실측 결과: 지터버퍼 효과(`drop=0 under=0`)는 깨끗하게 나왔지만, **체감 끊김은 이전과 동일**("똑같다"/"별 차이 없다" 반복 확인).
+- 결론: EBF는 기능상 정상 동작하지만 가로스크롤 끊김의 원인이 아니었음. 실행 파일(`cg-streamer-ebf`)은 삭제, 소스의 `CG_EBF` 빌드
+  옵션(기본 OFF)만 참고용으로 남김.
+
+### OnPaint 원본 직접 캡처 진단(cef_dumper) — 두 번 수정이 필요했던 측정 함정
+- 목적: RGA/MPP/UDP를 전혀 안 거치고 CEF가 OnPaint로 내놓는 원본 BGRA를 그대로 mp4(VFR, 도착 시각 그대로)로 떠서 끊김이 CEF 자체
+  문제인지 이후 단계 문제인지 구분. `cef_dumper.{h,cpp}` 신규, `main.cpp`에 `--dump-onpaint=`/`--dump-seconds=`/`--page=`(테스트용 다른
+  html 로드) 플래그 추가.
+- 1차 시도(동기 인코딩): OnPaint 콜백 안에서 곧바로 `sws_scale`+`avcodec_send_frame`(libx264)까지 동기 처리 → 8초 캡처에 88장(~11fps)
+  밖에 안 나옴. 사용자가 실제로 영상을 보고 "그렇다(끊겨 보인다)"고 확인.
+- 2차 시도(비동기로 수정 후 재측정): 느린 인코딩이 OnPaint 자체를 블로킹하는 게 측정을 왜곡하는 것 아닌가 싶어, PushFrame은 가벼운
+  메모리 복사만 하고 실제 sws_scale/libx264 인코딩은 별도 워커 스레드(큐+조건변수)로 분리하도록 재작성. 재측정 결과도 ~14~16fps로
+  거의 동일 — `--gpu`/cfg 로드 유무를 바꿔도 변화 없음.
+- **측정 함정 결론**: 이 덤프 테스트는 `--no-encode`(유휴) 모드에서만 돌렸는데, 이 보드(ARM, CPU 주파수 스케일링)는 시스템이 거의 일을
+  안 하면 클럭을 낮춰서 CEF 자체도 덩달아 느려짐 — 즉 "CEF가 느리다"가 아니라 "유휴 상태의 보드가 느리다"를 측정하고 있었음. 실제
+  운영 조건(인코딩 켜짐, MPP/RGA가 CPU/GPU를 바쁘게 돌림)에서 재는 `[stat] paint=.../s` 가 진짜 신뢰할 수 있는 숫자. 진단 코드는
+  `main.cpp`에서 `#if 0`로 비활성화, 코드만 보존(`cef_dumper.*`는 비동기 버전으로 남겨둠).
+
+### 가로스크롤 효과를 캔버스 대신 CSS transform/animation으로 — 시도했으나 퇴행 있어 원복
+- 실측(`bin/web/test-css-scroll.html`로 A/B): 캔버스 매프레임 재그리기 paint≈74~86/s, CSS 버전 paint≈105~120/s(최대 1.6배). 메인
+  스레드 지연에 덜 민감할 거라 기대.
+- `cg-runtime.js`에 `isCssCrawl()`/`syncCrawlOverlays()` 적용(type=text, effect가 직접 crawl/roll, outEffect 없음, runs 없음인 경우만
+  DOM 오버레이로 전환) → 실측 성능은 확보했지만 사용자가 실제로 보고 **글씨체가 달라짐**(캔버스의 kerning/space/textWidth 커스텀
+  로직과 레이어별 외곽선을 `-webkit-text-stroke`로 재현 못함) **레이어 순서 깨짐**(DOM을 body 맨 뒤에 붙여서 항상 캔버스 전체보다
+  위에 뜸 — "속보" 라벨이 가려짐)을 확인 → 전체 되돌림(커밋 `b6d4d2c`).
+- 버그 하나 더 발견(되돌리기 전에 수정까지 했었음, 참고용): `animation-iteration-count:1`+`fill-mode:forwards` 조합은 음수
+  `animation-delay`만 바꿔선 재시작이 안 됨(한 번 끝나면 그대로 멈춤) — 페이지가 루프를 돌면 자막이 한 바퀴만 돌고 멈춰버림.
+  `animationName`을 `none`으로 바꾸고 강제 reflow(`el.offsetWidth`) 후 원래 이름으로 되돌리는 방식으로 고쳐야 재시작됨.
+
+### 가로스크롤 텍스트를 오프스크린 캔버스에 캐싱 — 유지함
+- CSS 전환의 성능 이득(캔버스 재그리기 비용 절감)만 부작용 없이 가져오는 방법: `cg-runtime.js`에 `cachedTextCanvas()` 추가 —
+  텍스트/스타일 시그니처가 안 바뀌면 오프스크린 캔버스에 캐싱된 비트맵을 `drawImage()`로 위치만 옮겨 찍음(기존 `drawText()` 그대로
+  재사용하므로 글씨체/레이어 문제 없음). 위치 계산(`v.x`)은 기존처럼 매 프레임 그대로 해서 "멈추는" 버그도 구조적으로 발생 안 함.
+- 실측: paint 74~86/s → 108~122/s. 커밋 `5b06d94`.
+
+### 근본 원인 발견: `--gpu`로도 사실은 SwiftShader(소프트웨어) 폴백 상태였음
+- 위 방법들을 다 적용해도 "체감은 똑같다"는 피드백이 반복 → "이미 공급 과잉(`under=0`)인 상태에서 공급을 더 늘리는" 시도였을 뿐
+  근본 원인이 아니었다고 판단, 접근 전환.
+- 기본 실행(`--gpu` 없이)은 `main.cpp`에서 `disable-gpu`/`disable-gpu-compositing`이 항상 붙어 CEF가 완전 소프트웨어 렌더링으로
+  떨어짐(paint≈11fps) → `--gpu`로 이를 끄면 paint 75~120fps로 개선되는 걸 먼저 확인했었음. 그런데 실제 GPU 프로세스 커맨드라인을
+  보니 `--use-gl=angle --use-angle=swiftshader-webgl`로 떠 있었음 — **`--gpu`를 줘도 ANGLE이 SwiftShader로 폴백한 상태**였을 뿐,
+  진짜 GPU 가속이 아니었음.
+- `cef_server_build.md`(이 보드의 커스텀 CEF 130이 Mali DDK 패치 포함해서 빌드된 문서) 재확인 — 5단계에 정확한 사용법이 이미
+  적혀 있었음: `--cef:use-angle=gles-egl`. `--use-gl=egl`(ANGLE 안 거치는 순정 EGL)은 이 CEF 빌드에 아예 컴파일 안 되어 있어
+  `gl_factory.cc` 에러로 거부됨, Vulkan 백엔드도 이 보드의 Mali 드라이버(`libmali-valhall-g610-g13p0-x11-gbm`, Vulkan ICD 없음)로는
+  불가 — `gles-egl`이 이 커스텀 빌드가 제공하는 유일한 진짜 하드웨어 경로.
+- `--cef:use-angle=gles-egl` 적용 결과: GPU 프로세스가 크래시/재시작 없이 한 번에 뜨고, **`paint`가 설정 fps(60)에 정확히 맞춰지며
+  `drop=0`**(SwiftShader는 75~120fps 과공급 + 지속적 drop). 사용자 확인: 가로스크롤 끊김 해소, **CPU 사용량 체감 절반으로 감소**.
+- `bin/start.sh`에 `--gpu --cef:use-angle=gles-egl` 기본 적용. 커밋 `e9ea8fe`.
+- 교훈: 증상(끊김)을 고치려고 여러 렌더링 기법(EBF/CSS/캐싱)을 바꿔치기하기 전에, 먼저 "진짜 GPU를 쓰고 있는지"부터 확인했어야
+  시간을 아꼈을 것. `ps aux`로 gpu-process 커맨드라인의 `--use-gl`/`--use-angle` 값을 확인하는 게 가장 빠른 1차 점검 포인트.
+
+## 2026-10-01 (이어서)
+
+### [cg-editor] 다크 테마 적용 (대시보드/팝업 참고 화면 계열)
+- 참고: 블랙/네이비 바탕 + 카드형 패널 + 남보라 헤더 + 파란 주 버튼 + 초록 강조, 팝업은 둥근 모서리(16px)·"✕ 닫기"·하단 작은 고정폭 안내줄.
+- `app/globals.css`:
+  - 기존 회색 계열 색(배경/글자/테두리 90곳)을 네이비 톤으로 일괄 변환(채도 있는 색과 이미 어두운 색은 유지).
+  - 파일 끝에 "Dark theme polish" 층 추가: 색 변수(`--bg/--card/--head/--accent` 등), 패널(둥근 카드, 남보라 제목줄), 버튼/입력/탭(활성=파란색), 메뉴·드롭다운, 스크롤바, 상태줄.
+  - 팝업 다이얼로그: 배경 흐림 + 어둡게, 둥근 모서리, 제목줄 "✕ 닫기", 목록 항목 카드, 하단 안내줄 고정폭 글꼴.
+- 원래 색으로 되돌리려면 `git checkout -- src/cg-editor/app/globals.css` (커밋 전 기준).
+- 확인: Chrome(CDP) 1920×1080 전체 화면, 새 이름으로 저장·미디어 선택 다이얼로그 캡처 확인. 캔버스에 그려지는 자막 색과 cg-streamer 출력에는 영향 없음(에디터 UI 색만 변경).
+
+### [cg-editor] 화면/저장 UI 정리 (이어서)
+- 제목: "Huton CG Editor"(화면 제목줄·브라우저 탭). 문구에서 "JSON" 제거(화면에 보이는 글자만, `.json` 확장자·코드는 그대로).
+- 파일 메뉴 "프로젝트 다른 이름으로 저장"(이름 창), "프로젝트 저장"은 이름 없이 바로 저장. 프로젝트 열기에서 PC 파일 선택/새로고침/붙여넣기 제거, **검색 칸** 추가(이름 필터, Enter 로 첫 결과 열기, 전체 개수 표시).
+- 패널: Attributes / Effects 폭 조정(24칸 그리드, 가운데 블록 고정 폭), 영상·음성 "시작 오프셋" 줄바꿈 방지(입력 칸이 남는 폭에 맞춰 축소), 텍스트 영역 자동 맞춤.
+- 타임라인: 현재 위치(playhead) 청록색, 선택된 줄/클립 글자 대비 개선(파란 선택색, 종류별 클립 색).
+- Effects 탭 오른쪽 미리보기 칸: 안쪽 색을 네이비 톤으로, 높이를 줄임(칸 41→35px). 이 탭의 다른 요소(목록·입력 칸 정렬)를 함께 바꾼 시도는 "이상해졌다"는 피드백으로 원복.
+- 예제: `bin/project/가로스크롤-예제.json` — 뉴스 자막 형태의 가로 스크롤(Crawl) 텍스트(오른쪽 끝에서 출발, 글 폭 6228px / 26초). 실행엔진(cg-runtime)에서 3·12·22초 캡처로 동작 확인.
+- 남은 제안: 열 때 미디어 파일 존재 확인 경고, 도움말 대화상자의 하단 상태 문구 정리, 끊김 없는 무한 가로 스크롤(새 효과) — 사용자 답변 대기.
+
+### [cg-editor] In/Out 선택 표시, Run Setting 안내 문장 간격
+- Effects 탭 In/Out 버튼: 공통 버튼 색 규칙이 `.active` 색을 덮어써서 선택 구분이 안 되던 문제 수정(선택=파란색, 미선택=어두운 회색). 같은 종류의 `.checks`/`.facebuttons` 토글에도 적용.
+- Run Setting 탭: "Manual은 페이지 끝에서 멈춥니다…" 안내 문장을 버튼 줄과 분리해 한 줄 전체를 쓰고 두 줄(30px) 간격을 둠.
+
+### [cg-editor] 프로젝트 삭제, 팝업/툴바/미리보기 수정
+- 프로젝트 열기 목록에 **삭제 버튼**(휴지통) 추가: 확인창 후 `bin/project/<이름>.json` 삭제, 현재 열려 있는 프로젝트는 삭제 불가, `bin/media` 는 지우지 않음.
+  파일 서버에 `DELETE /projects/<이름>` 추가(이름 정리·없는 파일 404). 기존 서버 프로세스는 재시작해야 적용됨(`stop`/`start`).
+- 프로젝트 열기 팝업에서 패널 경계선(`.rowsplit`, z-index 20)이 선택되던 문제: 팝업 배경 z-index 100, 우클릭 메뉴 101 로 상향.
+- 툴바 첫 번째 버튼을 "새 페이지" → **"새 프로젝트"** 로 변경(파일 메뉴와 동일 함수 `newProject`, 수정 사항이 있으면 확인창). 새 페이지는 Page List "+ 추가"와 삽입 메뉴에 있음.
+- Timeline Preview 가 2페이지로 넘어가던 문제: Run Setting 의 Apply to Playback / All File Playback 으로 켜진 "이어서 재생(sequence)" 상태를 단일 페이지 미리보기(Timeline Preview, Effects Preview, 보기>미리보기, F5)가 끄지 않던 것이 원인 → 미리보기 시작 시 `sequence.current=false`.
+  재현(Apply 후 Preview → 0.7초 만에 Page 2)과 수정 후(Page 1 유지) 확인.
+
+### 순위/기록 예제 프로젝트, 이동(moves) 기능, 메뉴 아이콘
+- **개체 이동(`moves`) 기능** (에디터 `app/model.ts`·`editor-canvas.tsx`, 실행엔진 `bin/web/cg-runtime.js` 공용):
+  `Item.moves=[{t:시작, dur:걸리는 시간, x?, y?}]` — 지정한 시각에 새 위치로 부드럽게(easeInOutCubic) 이동. 순위 변동 등에 사용.
+  normalizeProject 가 moves 를 검증해 보존(최대 500개, 값 범위 제한). 편집 UI 는 없음(JSON 작성, 재생/저장은 지원).
+- 예제 프로젝트(`bin/project/`): `수영-기록.json`(남자 100m 자유형 1~10등 기록, 청록), `육상-기록.json`(남자 100m 1~10등, 주황),
+  `종합순위-변동.json`(5라운드에 걸쳐 점수가 바뀌고 순위가 변하면 줄이 새 자리로 이동, ▲/▼ 변동 표시, 30초 반복).
+  기록판은 `linkName`(r1_name, r1_time …)으로 HTTP `PUT /text/<이름>` 갱신 가능(순위표에서 갱신 동작 확인). 샘플 데이터는 가상.
+  경기 스코어보드/리그 순위표/이름·점수 순위표는 방향이 바뀌어 삭제.
+- 메인 메뉴 항목별 **아이콘**(`app/menu-icons.tsx`), 메뉴 글자 왼쪽 정렬·폭 자동(긴 항목 줄바꿈 방지).
+- 확인: `tsc --noEmit` 통과, 실행엔진/에디터 캡처(이동 전·중·후), moves 보존(130개 개체 일치), 메뉴 4종 캡처.
+- 남은 제안(답변 대기): 실시간 순위 변경 HTTP 명령, moves 편집 UI, 기록이 흐르며 순위가 바뀌는 레이스형, 열 때 미디어 확인 경고, 도움말 하단 상태 문구 정리, 창 메뉴 패널 이름 한글화.
+
+### 생활정보 문자방송 예제 (2페이지)
+- `bin/project/생활정보-문자방송.json`: 글자 중심의 문자방송. 머리띠(제목·현재 시각 시계), 페이지 제목/쪽수, 2×2 글자 구역(구역 제목 색 + 줄글), 아래 띠(노란 "생활 알림" 라벨 + 흐르는 안내 자막).
+  1페이지 날씨·대기질·생활지수·교통, 2페이지 긴급 연락처·건강 수칙·분리배출·공공시설. 수치/내용은 예시(자막에도 표기).
+- 재생: 페이지당 18초, 자동 반복(loops 100). 전환은 다음 페이지가 오른쪽에서 밀려 들어오는 `move`(0.7초), 이전 페이지는 `fade` 로 퇴장(0.5초).
+  수동으로 넘기려면 Run Setting Mode=Manual. 에디터의 Timeline Preview 는 단일 페이지라서 여러 페이지 확인은 Run Setting 의 All File Playback.
+- 확인: 실행엔진 캡처(1페이지, 2페이지, 전환 중), 글자 폭 측정으로 자막 길이 설정(3102/3159px).
+
+### CEF 130 rkmpp 패치 빌드 적용, cg-streamer 재빌드 (보드에서)
+- `/root/work/cef_custom_130_arm64.tar.gz`(서버에서 빌드한 V4L2/rkmpp 패치 CEF)를 `/opt/cef/cef_custom_130_arm64`에 설치.
+  `make_distrib.py` minimal 패키징을 거치지 않은 원시 빌드 산출물이라 `cmake/`, `CMakeLists.txt`, `include/cef_version.h`,
+  `include/cef_config.h`, `include/base/internal/cef_net_error_list.h`, `Release/chrome-sandbox`, `Release/libvulkan.so.1` 이 빠져 있었음 →
+  기존 공식 130.1.16 배포본(동일 커밋 해시 `5a7e5ed`, 버전 문자열 일치 확인)에서 보강.
+- `~/.bashrc`의 `CEF_ROOT`를 새 경로로 변경, `cg-streamer` 재빌드.
+- 확인: `libcef.so`에 `/dev/video-dec` 문자열 5개(기존 공식본은 0개) → V4L2 패치 반영 확인. `cg-streamer` 실행 시 zygote/gpu-process/renderer 등 CEF 하위 프로세스 정상 기동,
+  `--run --out=test.ts --seconds=10`로 1920×1080/60fps/드롭 없음 H.264 출력 확인(ffprobe).
+  실제 RK3588 GPU로 mp4 `<video>` 하드웨어 디코딩이 되는지(`mpp_service` fd)는 미검증 — `cef_server_build.md` 5단계 참고.
+
+### [cg-editor] Cloudflare/vinext 제거 → 순수 Next.js 전환
+- 배경: `npm run dev`(vinext + `@cloudflare/vite-plugin`, 로컬 workerd 에뮬레이션)가 보드(Debian 11, glibc 2.31)에서 `workerd`
+  요구 glibc(≥2.35)를 못 맞춰 기동 즉시 죽고, miniflare가 죽은 프로세스에 쓰다 `EPIPE`. 이 편집기의 로컬(보드) 사용에는
+  ChatGPT Sites 호스팅 전용 기능(D1/R2 클라우드 저장, Workers 바인딩)이 불필요해 Cloudflare 레이어를 통째로 제거.
+- 삭제: `vite.config.ts`, `build/`(sites-worker, connector-preview 등 Sites 플러그인 전용), `lib/storage.ts`, `db/`, `drizzle.config.ts`, `drizzle/`,
+  `cloudflare-env.d.ts`, D1/R2 의존 `app/api/projects`·`app/api/media` 라우트(로컬 저장은 `files-server.mjs`가 이미 처리, 안 쓰이던 코드였음).
+- `package.json`: `dev`/`build`/`start` → `next dev`/`next build`/`next start`, `@cloudflare/*`·`vinext`·`vite`·`wrangler`·`drizzle-*` 등 devDependencies 제거.
+  `tsconfig.json`에서 `@cloudflare/workers-types` 제거.
+- `start.sh`/`build.sh`의 옛 wrangler 흔적도 수정: Next.js 16 CLI는 `--host`가 아니라 `--hostname`(dev/start 둘 다), 빌드 산출물은 `dist/`가 아니라 `.next/`.
+- 부수적으로 발견: `.next`/`.vinext`/`.wrangler`/`next-env.d.ts`가 이전에 root 권한으로 생성돼 있어 pi 권한 실행 시 권한 오류 → 정리.
+  (교훈: 이 보드에서 `npm run dev`를 터미널에서 직접 실행하면 root로 뜨기 쉬우므로 꼭 `./start.sh` 사용할 것, 그래야 파일 서버도 같이 뜸.)
+- 확인: `./start.sh`로 에디터(`:5173`)·파일 서버(`:8081`) 정상 기동, `tsc --noEmit` 통과. `app/` 쪽 에디터 코드는 처음부터 순수 Next.js App Router
+  코드라 수정 불필요했음.
+
+### [cg-editor] LAN 접속, 보안 컨텍스트 문제 수정
+- `crypto.randomUUID()`는 HTTPS/localhost 같은 "보안 컨텍스트"에서만 동작 → 보드를 LAN IP(`http://10.10.10.56:5173`)로 열면
+  `crypto.randomUUID is not a function`으로 새 프로젝트 생성이 깨짐. `app/model.ts`의 `uid()`를 `crypto.getRandomValues`(보안 컨텍스트 제한 없음)
+  기반으로 교체.
+- `.env`의 `CG_EDITOR_HOST=0.0.0.0` 활성화(파일 서버도 같은 주소로 열리게). LAN IP로 열면 Next.js 16이 기본으로 HMR 리소스를 cross-origin
+  차단 → `next.config.ts`에 `allowedDevOrigins: ['10.10.10.56']` 추가.
+- 확인: 보드 LAN IP로 에디터·파일 서버 접속, 프로젝트 열기(`bin/project` 목록 정상 응답) 확인.
+
+### cg-streamer HTTP 컨트롤 중계("송출 제어" 탭) 신설
+- 배경: `cg-streamer`는 `--run` 모드에서 HTTP 컨트롤 서버(기본 `127.0.0.1:5555`, play/next/prev/goto/stamp/global/text/quit/status)가
+  항상 켜져 있지만, 브라우저가 CORS 때문에 직접 호출할 수 없고 에디터 쪽에 이를 호출하는 코드도 없었음.
+- `scripts/files-server.mjs`에 `/ctl/*` 프록시 추가(`CG_CTL_PORT`/`CG_CTL_HOST`/`CG_CTL_TOKEN` 환경변수, 본문·메서드 보존,
+  토큰은 프록시가 붙임) → 같은 오리진(파일 서버)을 거쳐 CORS 회피. `app/files.ts`에 `ctlStatus()`/`ctlCommand()` 클라이언트 함수.
+- `app/stream-control.tsx`(신규, `useChannels`와 같은 훅 패턴) + `app/page.tsx`에 **"송출 제어"** 탭: 상태 표시(1.5초 폴링: 프로젝트명·페이지·재생여부·시간),
+  Play/Pause/Stop/Cut/Prev/Next/Skip/Clear, 페이지 이동, 엔진 종료(확인창).
+- 버그 하나 발견·수정: 프록시가 `req.pipe(preq)`로 본문을 스트림 전달하면서 `Content-Length`를 안 넘겨 Node가 chunked 로 보냈는데,
+  `cg-streamer`의 단순 HTTP 서버는 chunked 를 모르고 Content-Length 만 봐서 본문이 빈 것으로 읽힘 → `Content-Length` 헤더를 그대로 중계하도록 수정.
+- 확인: curl로 next/goto/pause 등을 프록시 경유로 보내 cg-streamer 상태가 실제로 바뀌는 것 확인(직접 호출과 응답 동일).
+
+### cg-streamer: reload / switch(다른 프로젝트로 전환) 명령, --run 중복 실행 방지
+- **reload**(`POST /reload`): project 파일을 디스크에서 다시 읽음. `cg-streamer`는 시작할 때 프로젝트를 한 번만 읽고 다시 읽는 수단이
+  없었음(에디터에서 저장해도 떠 있는 송출에 반영 안 됨) → `bin/web/cg-runtime.js`에 `reloadProject()` 추가, 네이티브 `load` cefQuery(기존에 이미
+  디스크에서 다시 읽게 구현돼 있던 것)를 재사용.
+- **switch**(`POST /switch`, 본문=UTF-8 평문 프로젝트 이름): `bin/project`의 다른 프로젝트로 통째로 전환. `g_project` 경로를 바꾼 뒤 reload.
+  경로 구분자/상위 경로/제어문자 검증(`SafeProjectName`, 한글 프로젝트명은 허용), 없는 프로젝트는 404.
+- 두 명령 모두 처음엔 "1페이지·정지 상태"로 리셋했는데, 사용자가 반영이 "안 되는 것처럼" 두 번 헷갈려함(실제론 반영됐지만 재생 중이 아니라
+  화면이 그대로/검은 화면) → `--autoplay`로 띄운 엔진이면 reload/switch 후 바로 재생되게 수정(URL의 `autoplay=1` 체크, `rangeStart()`로 시작).
+  수동 제어(비 `--autoplay`)는 기존대로 정지 상태 유지.
+- **`--run` 중복 실행 방지**: 같은 UDP 목적지/컨트롤 포트로 여러 인스턴스가 뜨면 출력이 섞여 비트레이트가 이상해짐 → `/tmp/cg-streamer.run.lock`
+  파일락(`flock`, 비정상 종료해도 커널이 자동 해제). 두 번째 `--run` 은 즉시 "이미 실행 중" 메시지와 함께 종료(exit 1).
+- cg-editor "송출 제어" 탭에 전환용 드롭다운(`bin/project` 목록) + "다른 프로젝트로 전환", "저장한 내용 다시 불러오기(Reload)" 버튼 추가(`app/files.ts`
+  `ctlSwitch()`).
+- 버그 발견·수정: `useStreamControl`의 "언마운트 후 setState 방지" `mounted` ref 가드가 Fast Refresh(핫리로드)로 `false` 에 고정돼버리면
+  그 뒤 모든 액션의 `finally{setBusy(false)}`가 스킵되어 버튼 전체가 영구 disable 되는 버그 → React 18+ 는 언마운트 후 setState가 안전(조용히 무시)하므로
+  가드 자체를 제거.
+- disable/활성 버튼 시각 구분 개선(`app/globals.css` `.streamcontrol`): disable 은 회색조+점선 테두리+`cursor:not-allowed`, 활성은 테두리 강조.
+- 확인: `--run` 중복 실행 시도 → 즉시 거부(exit 1) 및 정상 종료 후 재시작/강제종료(`kill -9`) 후 재시작 모두 정상 확인. reload/switch 를 경로 탈출·존재하지
+  않는 프로젝트명으로 시도 시 올바르게 거부. 8081 프록시 경유로 20회 연속 랜덤 프로젝트 전환(0.3초 간격) 전부 성공, 프로세스 메모리/개수 이상 없음.
+  `tsc --noEmit` 통과.
+- 남은 일: `main.cpp`/`cg-runtime.js` C++·JS 변경은 재빌드·재시작해야 반영됨(핫리로드 대상 아님) — 수정할 때마다 `cg-streamer` 재시작 필요한 걸 계속 깜빡해서
+  디버깅이 늘어졌음, 다음엔 변경 직후 바로 재시작·재검증 습관화.
+
+### cg-streamer: reload 후 네이티브 영상이 눌러붙는 버그 수정
+- 증상: 영상이 있는 페이지(예: `자막프로젝트.json` 2페이지의 `girsday.mp4`)를 거쳐 reload/switch 한 뒤에는, 영상이 없는 페이지/프로젝트로 돌아가도
+  `[stat]` 로그의 `video=on`이 계속 남고 `under`(프레임 반복 카운터)가 멈춘 채 고정됨 → 비트레이트·CPU 이상, "송출이 안 되는 것 같다"로 체감.
+- 원인: `reloadProject()`(`bin/web/cg-runtime.js`)가 `nativeVideo.key`를 미리 `''`로 리셋해뒀음. 매 프레임 도는 `syncVideo()`는 "이전 키와 다르면
+  video:stop/play 를 보낸다" 는 비교로 동작하는데, 새 프로젝트도 영상이 없으면 desired 영상 키가 똑같이 `''`가 되어 "변화 없음"으로 오판 → 이전 프로젝트의
+  네이티브 MPP 비디오 디코더를 끄는 `video:stop` 이 안 나가고 그대로 눌러붙음.
+- 수정: `reloadProject()`에서 `nativeVideo.key` 리셋 줄 제거 — `syncVideo()`의 자연스러운 비교에 맡김.
+- 확인: cg-streamer 재시작 후 영상 있는 페이지(2) → 영상 없는 프로젝트("가로스크롤-예제")로 전환 → `[stat]` 로그가 `video=on`에서 `video=off`로 정상
+  전환되고 `under` 카운터도 다시 정상적으로 증가하는 것 확인.
+- 참고(답변): 프로젝트의 `"video"` 아이템은 CEF `<video>` 태그가 아니라 네이티브 MPP 디코딩(`video_source.cpp`) + RGA 합성 경로를 씀
+  (`cg-runtime.js` 는 video 타입을 캔버스에 그리지 않고 건너뜀). 이번에 적용한 CEF rkmpp(`<video>` 태그용 V4L2 패치)는 이 경로와 무관 — 이 기능은 패치 없이도 그대로 동작.
+
+### --accel(OnAcceleratedPaint dmabuf) 실기 테스트 — 동작 안 함, 원복
+- `rk3588-accel` 프리셋(`ENABLE_ACCEL_PAINT=ON`)으로 재빌드 후 `--accel --out=test.ts --seconds=10`로 테스트.
+- 결과: GPU 프로세스가 초기화 단계에서 죽음(`libGL error: failed to load driver: rockchip` → `Exiting GPU process due to errors during initialization`).
+  accel 경로는 GPU 텍스처 공유가 필수라 GPU 프로세스가 없으면 아예 동작 불가 — `test.ts` 0바이트(프레임 한 개도 안 나옴).
+  (OnPaint 소프트웨어 경로는 이 GPU 실패와 무관하게 정상 동작 — 지금까지 써온 기본 경로는 영향 없음.)
+- 원복: `bin/cg-streamer`가 다른 빌드 디렉터리(`build/rk3588-accel`)에 의해 덮어써진 상태라 `build/rk3588`가 "no work to do"로 재빌드를 건너뜀 →
+  `bin/cg-streamer` 를 직접 지우고 `rk3588`(비-accel) 프리셋으로 강제 재링크, `--accel` 플래그를 줘도 OnPaint 로 폴백하는 것까지 확인.
+- 결론: 이 보드/환경에서는 Mesa rockchip DRI 드라이버가 없어서 `--accel`을 못 씀. 정식 지원하려면 별도 드라이버 설치/설정 필요(미조사).
+
+### [cg-editor] HDMI 입력(라이브) 오브젝트, 화면 전체 크기 맞춤
+- HDMI RX 라이브 테스트용으로 프로젝트에 `src:"hdmirx"`인 video 아이템을 넣는 UI가 없었음(기존 "동영상"은 `bin/media` 파일만 선택 가능) → 추가:
+  - `app/page.tsx` `addHdmiVideo()`: 파일 선택 없이 바로 전체화면(1920×1080) video 아이템 생성. 삽입 메뉴·툴바(Cast 아이콘)에 배치.
+  - `app/model.ts` `normalizeProject`: src 검증 정규식이 `hdmirx`/`/dev/videoN`을 "unsupported media"로 거부하던 것 수정(저장 후 재오픈 시 사라지는 것 방지).
+  - `app/editor-canvas.tsx`: 디자인 캔버스에서 hdmirx 아이템은 실제 로드를 시도하지 않고 "HDMI 입력 (라이브)" 플레이스홀더로 표시(실제 재생은 cg-streamer 에서만 확인 가능).
+- 테스트 중 위치가 살짝 밀려(x=-5,y=-9) RGA가 매 프레임 "Illegal dst rect"(좌표 음수) 에러를 내며 합성 실패 → 화면엔 "처음엔 나오고 그 다음부터 안 보임"으로 체감.
+  위치를 0,0,1920×1080으로 되돌리고 `reload`로 확인(에러 사라짐).
+- 재발 방지로 **"화면 전체 크기로"** 기능 추가(`fitFullscreen`, 툴바 Maximize2 아이콘 + 우클릭 메뉴): 선택한 오브젝트를 정확히 x:0,y:0,w:1920,h:1080 으로 맞춤.
+- HDMI RX 자체(`hdmirx_source.cpp`)는 로그상 재연결이 여러 번 정상적으로 성공(`stop`→`start`→`signal 3840x2160 59.94fps`)했지만, 한 번은 신호를 잡자마자 바로
+  꺼지고 이후 페이지에 계속 있었는데도 재연결이 안 된 경우를 로그에서 발견 — 원인 미해결, 재현 시 추가 조사 필요(네이티브→JS로 연결 끊김이 전달 안 돼서
+  `syncVideo()` 의 키 비교가 재연결을 트리거 못 하는 경로가 있을 가능성).
+
+### 로그 정리, 보드 디스플레이(HDMI 출력) 확인, 키오스크 스크립트
+- `bin/log/` 폴더 신설, 테스트하며 쌓인 `.stream*.log` 찌꺼기 정리. `bin/*`가 이미 `.gitignore`라 `bin/log/`는 별도 설정 없이 자동 제외됨.
+- 보드에 HDMI 출력 포트가 2개(물리 라벨 "1"/"2") 있는데, DRM 커넥터명(`card0-HDMI-A-1`/`-2`)과 실제 매핑이 케이블 연결마다 바뀌는 것처럼 보임(원인 미확인 —
+  재현 조건 불명확). 모니터가 1대뿐이라 "editor/송출 분리 출력"은 지금은 확인 불가, 모니터 2대 연결 시 재확인 필요.
+  해상도가 800x600으로 낮게 고정돼 있던 것은 `xrandr --output <출력> --mode <최대모드>`로 수정(이 모니터는 1920×1080 지원 안 함, 최대 1368×768).
+- `cg-streamer` 자체는 런타임에 `/opt` 가 필요 없음(빌드 시 `bin/`에 CEF 런타임 파일을 전부 복사해 두고, RPATH도 `.` 를 `/opt/...` 보다 먼저 찾음 —
+  `/opt/cef/...`는 재빌드할 때(`CEF_ROOT`)와 `bin/libcef.so`가 없어졌을 때의 폴백 용도). `/opt/chromium.org/...`는 별개로 키오스크용 보드 시스템 브라우저.
+- `bin/start.sh`/`bin/stop.sh` 신설: cg-editor + cg-streamer(UDP 송출, 로컬 미리보기 없음) + Chromium 키오스크(cg-editor 화면)를 한 번에 올리고 내림.
+  `CG_PROJECT`/`CG_UDP`/`CG_EDITOR_PORT` 환경변수로 기본값(자막프로젝트, 10.10.10.18:1234, 5173) 변경 가능. `.gitignore`에 `!bin/start.sh`/`!bin/stop.sh` 추가.
+
+## 2026-10-01
+
+### 실행엔진 설계 + cg-streamer 구현 (cg-editor 결과물을 CEF 로 재생)
+
+- 배경: cef-mpp 는 테스트용 소스, 실제 작업은 `src/cg-streamer/`. cg-editor(Next.js) 가 저장하는 프로젝트 JSON 을
+  CEF 에서 그대로 재생하는 실행엔진을 만든다.
+- 결정:
+  - HTML 로 굽지 않고 **JSON 이 원본**, 공용 런타임이 JSON 을 읽어 렌더링 (글자 단위 렌더/효과 13종/시계/채널 상태머신이
+    canvas+시간 함수라 HTML 변환 시 미리보기와 출력이 달라질 위험).
+  - 영상 아이템의 효과는 실행엔진에서 지원하지 않음 (위치·크기·반복만 네이티브 MPP 로 전달).
+  - 제어는 UDP → **HTTP** (UDP 는 전환기 병행). 응답/상태 조회 가능, 256바이트 제한 없음.
+  - 폴더 규약: `bin/web/player.html`, `bin/web/cg-runtime.js`(공용), `bin/web/<프로젝트명>/project.json` + `media/`
+    (src 는 상대경로, 공용은 `bin/web/_shared/`).
+- 구현:
+  - `bin/web/cg-runtime.js` + `player.html`: cg-editor 의 model/effects/text-render 를 Konva 없이 Canvas2D 로 포팅.
+    Run Setting, Stamp 2채널, 효과 13종, 시계/계수기, 텍스트 갱신. 영상은 `cefQuery` 의 `video:*` 로 네이티브에 위임.
+  - `src/cg-streamer/main.cpp`: HTTP 제어 서버(`--http/--bind/--token`, 기본 127.0.0.1:5555), 엔드포인트
+    `/play /run /stop /clear /pause /cut /skip /next /prev /goto/N /stamp/{1|2}/{play|stop|pause} /global/{play|stop}`,
+    `PUT /text/{linkName}`, `GET /status`, `POST /quit`. 명령은 CEF UI 스레드에서 `cg.cmd()` 로 실행, 인자는 화이트리스트 +
+    JS 문자열 이스케이프. `cefQuery` 에 `base`(프로젝트 폴더 URL)·`state:`(상태 보고) 추가, `--autoplay` 추가.
+  - `bin/cgctl.sh`: UDP(nc) → HTTP(curl) 로 변경.
+  - 빌드: `CMakeLists.txt`/`CMakePresets.json` 을 `src/cg-streamer/` 로 이동, 실행파일 출력은 `bin/`
+    (CEF 런타임 파일도 bin/ 으로 복사, 웹은 `bin/web/` 그대로 사용). `.gitignore` 는 `bin/*` 무시 + `bin/web/`·`bin/cgctl.sh` 예외,
+    `doc/cef/*.tar.gz` 제외. `ZENV.md`/`cef_server_build.md` 빌드 명령 갱신.
+- 검증: 헤드리스 Chrome 에서 샘플 프로젝트 렌더(한글 자막/외곽선/그림자/시계/wipe·fade·scale) 및 goto/text/clear 명령 확인.
+  **C++ 변경은 Windows PC 에서 빌드하지 못해 컴파일 미검증** → 보드에서 빌드/송출 확인 필요.
+- 제약/미구현: 에디터 "내보내기"(media/ 로 풀고 src 상대경로화) 없음 → `data:`·`/api/media` 미디어는 실행 불가,
+  영상 동시 1개·Global 은 play/stop 만, 오디오 미재생, 폰트는 대상 머신에 설치 필요, clear/stop 은 Out 효과 없이 즉시.
+- 기타: 2개 커밋에 섞여 GitHub 100MB 제한에 걸린 `doc/cef/cef_custom_130_arm64.tar.gz` 를 제외하고 커밋을 합쳐 푸시(`eff7b0c`).
+- 문서: `doc/실행엔진설계.md`.
+
+### [cg-editor] 실행 스크립트 추가 (start/stop/build, .env.production)
+- `start.sh`·`stop.sh`·`build.sh` 및 Windows 용 `start.bat`·`stop.bat`·`build.bat` 추가 (src/cg-editor/).
+  - `build`: Node 22.13+ 확인, node_modules 없으면 `npm ci`, `npm run build` (`--install`/`--check` 옵션).
+  - `start`: 백그라운드 실행(PID/로그 `.run/`), 기본 개발 서버(5173), `--prod` 는 `dist/` 로 실행, `--port/--host/--fg` 옵션.
+  - `stop`: PID 의 프로세스 그룹/트리 종료.
+- `.env.production`: `CG_EDITOR_PORT=8080`(prod 모드 기본 포트, 옵션이 우선), `CG_EDITOR_HOST`(주석), `WRANGLER_SEND_METRICS=false`.
+  `CLOUDFLARE_CF_FETCH_ENABLED` 는 기본값이 꺼짐이라 넣지 않음. cg-editor `.gitignore` 의 `.env*` 때문에 커밋되지 않음.
+- 확인(Windows): `start.bat` 개발(5190)/`/prod`(8080) 기동 → HTTP 200, `stop.bat` 종료, `build.bat` 빌드 성공(`dist/`).
+  배치 파일은 CRLF, `timeout` 대신 `ping` 으로 대기(콘솔 없는 환경에서 timeout 이 실패). `.sh` 는 문법 검사만(bash -n).
+
+### [cg-editor] cg-editor3(doc/gptcode) 수정분 병합
+- 내용: Stamp Playback(두 자막 채널, Top/Bottom 배치, 독립 재생·정지·반복·갱신), Global Animation Playback(배경 영상, On Air, 재생·일시정지·되감기, 구간 재생), 채널 설정·미디어 JSON 저장/복원.
+- 방식: 덮어쓰기 없이 3-way 병합. 기준은 `CG-editor-source2.zip`, 내 쪽은 기존 src/cg-editor, 상대는 cg-editor3. 충돌 없음.
+- 대상: app/channels.tsx(신규), editor-canvas.tsx, globals.css, model.ts, page.tsx, tests/editor-checks.ts, 다운로드-실행안내.txt.
+- 확인: `tsc --noEmit` 통과. 화면 동작은 브라우저 확인 필요. 커밋/푸시는 아직 안 함.
+
+### [cg-editor] cg-editor2(doc/gptcode) 수정분 병합
+- 내용: Run Setting(페이지 구간·반복 횟수·대기·자동/수동), Playback(Clear·Cut·Skip·이전/다음), 효과 프리셋 수·Soft/Hard 보완.
+- 방식: 덮어쓰기 없이 3-way 병합. 기준(base)은 `doc/gptcode/CG-editor-source.zip`, 내 쪽은 기존 src/cg-editor, 상대는 cg-editor2.
+- 대상: app/attributes.tsx, editor-canvas.tsx, effects.ts, globals.css, model.ts, page.tsx, tests/editor-checks.ts, package-lock.json, 다운로드-실행안내.txt.
+- 유지한 기존 변경: 패널 높이 조절(rowsplit), 메뉴 바깥 클릭 닫기, Effect 체크 해제.
+- 확인: `tsc --noEmit` 통과. 화면 동작은 브라우저에서 확인 필요.
+- 백업: 병합 전 app/, tests/를 세션 임시 폴더에 복사해 둠.
+
+### [cg-editor] 미디어는 bin/media, 프로젝트는 bin/project (파일 서버 추가)
+- 폴더: `bin/media/`(이미지·영상·음성 원본), `bin/project/`(프로젝트 JSON). `.gitignore`: media 내용은 제외(`.gitkeep`만), project 는 추적.
+- 배경: 에디터 서버가 Cloudflare Worker 런타임(개발 vite+workerd, 프로덕션 wrangler)이라 디스크를 읽고 쓸 수 없음 →
+  **파일 서버 `scripts/files-server.mjs`**(의존성 없는 Node, 기본 127.0.0.1:8081)를 추가하고 `start`/`stop` 이 에디터와 함께 기동/종료.
+  - `GET /media[?kind=]` 목록, `GET /media/<파일>` 스트리밍(Range 지원), `GET /projects`, `GET|PUT /projects/<이름>`.
+  - 안전장치: 파일명 검증(경로 구분자/`..` 거부), 확장자 화이트리스트, CORS 는 에디터와 같은 호스트만, 프로젝트 50MB 제한,
+    저장은 임시 파일 후 교체, `cg-editor` 형식이 아니면 거부.
+  - 프로젝트 저장 시 `data:` 미디어는 `bin/media/import-<해시>.<확장자>` 로 풀고 `src` 를 `../media/<파일>` 로 치환(내보내기 갭 해소).
+- 에디터(`app/files.ts` 신규, `model.ts`, `page.tsx`, `channels.tsx`, `editor-canvas.tsx`, `audio-tracks.tsx`):
+  - 미디어 src 는 `../media/<파일>` 로 저장(project 폴더 기준 상대경로 → cg-streamer 가 그대로 읽음), 화면에서는 `mediaUrl()` 로 파일 서버 주소로 변환.
+  - 이미지·동영상·음성 버튼과 배경 영상(Global)은 PC 파일 선택 대신 **bin/media 목록 대화상자**에서 선택. 캔버스로 파일을 끌어다 놓으면 bin/media 에 같은 이름이 있을 때만 가져옴.
+  - "보관함(D1/R2) 저장" → "bin/project 에 저장"으로 교체(목록·열기 포함). PC JSON 저장/열기는 유지.
+- 설정: `src/cg-editor/.env`(공통: 포트 5173, 파일 서버 8081 등) 추가, `.env.production`(prod 8080)이 덮어씀, `--port/--host` 옵션이 최우선.
+  (`.env*` 는 cg-editor `.gitignore` 로 커밋되지 않음)
+- 검증: 파일 서버 단독 테스트(목록/Range/경로 탈출 차단/data: 풀기/CORS), `tsc --noEmit` 통과, Windows 에서 `start.bat`(dev 5173, prod 8080)·`stop.bat` 로
+  에디터+파일 서버 동시 기동/종료 확인. **브라우저에서 실제 UI(미디어 선택·저장·열기) 조작은 미확인.**
+- 제약: 파일 서버 포트는 `app/files.ts` 의 `FILES_PORT` 와 같아야 함. "PC에 JSON 저장"은 `../media/` 참조를 파일로 내장하지 않음.
+
+### 실행 파일 이름 cef_mpp → cg-streamer
+- CMake 타깃 `cg_streamer`, `OUTPUT_NAME cg-streamer` → 실행 파일 `bin/cg-streamer` (`project()` 이름도 `cg_streamer`).
+- `bin/cgctl.sh`(`pgrep -x cg-streamer`), `main.cpp` 사용법 주석, `ZENV.md`, `cef_server_build.md`, `doc/실행엔진설계.md` 의 명령어를 새 이름으로 변경.
+- 위의 이전 기록(2026-09-29 ~ 10-01)에 적힌 `cef_mpp` 는 당시 이름이라 그대로 둠. 이 PC(Windows)에서는 빌드하지 못해 보드에서 확인 필요.
+
+### [cg-editor] 화면 정리: 타임라인을 Playback 패널 탭으로, 행 3개 → 2개
+- 배경: 참고한 NABI HD(`doc/타사CG메뉴얼/NAVI.pptx`)는 위쪽(Page List / 캔버스 / Catalog)과 아래쪽(Attributes·Effects / Playback 계열 / Color) **2행**이고 타임라인 패널이 없음.
+  cg-editor 는 타임라인 행이 하나 더 있어 화면이 꽉 찼음.
+- 변경(`app/page.tsx`, `app/panels.tsx`, `app/globals.css`):
+  - Timeline 패널을 없애고 **Timeline / Playback 패널의 첫 탭(기본)** 으로 이동. 탭: Timeline · Playback · Run Setting · Stamp Playback · Global Animation Playback.
+  - 패널 배치 7칸 → 6칸(아래 행: Attributes 4칸 / Timeline·Playback 5칸 / Color 3칸), 행 높이 기본 280px(넓은 화면 300, 좁은 화면 260), 경계선 드래그 최소 100px.
+  - 탭 줄은 패널 맨 아래에 고정(내용만 스크롤) → Run Setting 등을 선택해도 탭이 올라가지 않음.
+  - 저장 키 갱신(`cg-layout-v3`, `cg-rows-v4`)으로 이전 배치/높이 설정은 무시되고 새 기본값 적용.
+- 검증: `tsc --noEmit` 통과. Chrome(CDP)로 1920×1080 에서 5개 탭 모두 탭 줄 위치 동일(top 1022) 확인, 화면 캡처 확인.
+  캔버스 영역 높이 570px.
+
+### [cg-editor] 미디어/프로젝트 선택 목록 정렬 수정
+- 증상: 미디어 선택 목록에서 항목이 세로로 눌려 파일명과 용량(두 줄)이 잘려 보임.
+- 원인: `.savedlist`(flex 세로 + max-height 280px) 안의 버튼이 항목이 많으면 flex 로 줄어듦(높이 25px).
+- 수정(`app/globals.css`): 버튼 `flex-shrink:0`, 최소 높이 48px, 세로 가운데 정렬, 긴 파일명은 말줄임, 목록 최대 높이 `min(420px,55vh)`. 프로젝트 열기 목록에도 같이 적용됨.
+- 확인: Chrome(CDP)으로 긴 파일명·11개 항목 캡처 확인(항목 높이 25px → 약 58px, 이름/용량 모두 표시).
+
+### [cg-editor] 파일 메뉴 정리 + 텍스트 영역 자동 맞춤
+- 파일 메뉴: 새 프로젝트 / 프로젝트 열기 / 프로젝트 저장 / PNG 내보내기 (툴바 설명·저장 대화상자 제목도 같은 이름). 동작은 그대로.
+- 텍스트 영역 자동 맞춤(`app/text-render.ts` `fitText`, `app/model.ts` `Item.autoSize`, `app/page.tsx`):
+  - 증상: 새 텍스트가 1400×180(또는 화면 오른쪽 끝까지 × 160)으로 만들어져 글자보다 영역이 너무 큼.
+  - 새로 만드는 텍스트/시계/계수기는 글자 크기에 맞춰 시작(예: 기본 자막 100px 글자 → 772×117). 글자·글꼴·크기·자간·외곽선 등을 바꾸면 영역도 다시 맞춤.
+  - W/H 를 직접 바꾸거나 핸들로 크기를 조절하면 자동 맞춤이 해제됨. 편집 메뉴 "텍스트 영역 맞춤"으로 다시 맞춤(선택한 개체).
+  - 폭 여백은 8 미만으로 줄이면 안 됨(drawText 가 `줄폭+글자폭 > w-8` 이면 줄바꿈 → 마지막 글자가 사라짐). 그림자 번짐은 영역에 포함하지 않음.
+  - 기존 프로젝트의 텍스트는 `autoSize:false` 라 그대로 유지됨.
+- 확인: `tsc --noEmit` 통과, Chrome(CDP)로 삽입→문자 결과 캡처 확인.
+
+### [cg-editor] 프로젝트 저장 / 새 이름으로 저장 분리
+- 파일 메뉴: 새 프로젝트 / 프로젝트 열기 / **프로젝트 저장** / **프로젝트 새 이름으로 저장** / PNG 내보내기.
+- **프로젝트 저장**(메뉴·툴바·Ctrl+S): 이름을 묻지 않고 `bin/project/<프로젝트 이름>.json` 에 바로 저장(이미 저장/열어 온 프로젝트는 덮어씀).
+  한 번도 저장하지 않은 새 프로젝트가 같은 이름의 기존 파일과 겹칠 때만 덮어쓰기 확인을 묻는다(이름은 묻지 않음).
+- **프로젝트 새 이름으로 저장**(메뉴·Ctrl+Shift+S): 이름 입력 창을 띄우고, 이미 있는 이름이면 덮어쓰기 확인. 창에는 "PC에 JSON 파일로 저장"도 있음.
+- 이전의 "날짜를 붙여 새 파일로 저장" 버튼과 3개 저장 버튼은 제거.
+- 확인(Chrome CDP): 새 이름으로 저장 → 이름 창 표시 → 임시 이름 저장 성공, 이어서 프로젝트 저장 → 창/확인창 없이 파일 갱신.
+  테스트 임시 파일은 삭제(기존 `test.json`, `test1.json`, `자막프로젝트.json` 은 그대로).
+
+### 커밋/푸시 (2026-10-01)
+- `c1693c7` 실행엔진(cg-streamer) 구현, 에디터 화면/저장 구조 개편 → `origin/main` 푸시 (`040d475..c1693c7`, 31개 파일).
+  - 앞서 100MB 초과 파일(`doc/cef/cef_custom_130_arm64.tar.gz`) 때문에 거부된 푸시는 커밋을 합치고 해당 파일을 제외해 `eff7b0c` 로 해결.
+- 커밋하지 않은 것: `src/cg-editor/tsconfig.tsbuildinfo`(빌드 산출물), `bin/project/` 의 사용자 테스트 파일(`test.json`, `test1.json`, `자막프로젝트.json`),
+  `bin/media/` 의 샘플 미디어(`.gitignore` 로 제외, `.gitkeep` 만 추적).
+- 푸시 전에 발견/조치:
+  - 사용자 커밋 `040d475 delete bin/web` 이 같은 경로를 지우며 `bin/web/player.html` 이 디스크에서 사라짐 → 같은 내용으로 재생성해 커밋.
+  - 줄바꿈 자동 변환(`core.autocrlf=true`) 때문에 `.sh` 가 보드에서 CRLF 로 깨질 수 있어 `.gitattributes` 추가(`*.sh eol=lf`, `*.bat eol=crlf`).
+- 남은 일: **C++ 변경(`main.cpp`, CMake)은 Windows 에서 빌드하지 못해 컴파일 미검증** → 보드에서
+  `cd src/cg-streamer && cmake --preset rk3588 && cmake --build --preset rk3588` 후 `bin/cg-streamer --run --project=project/<이름>.json` 확인 필요.
+  브라우저에서의 미디어 선택·저장/열기 실제 조작은 CDP 스크립트 수준으로만 확인.
+
+## 2026-09-30
+
+### 실기 첫 빌드/실행 (FriendlyElec CM3588 = RK3588)
+
+- 보드 OS는 env.md 가정(Debian 12)과 달리 **Debian 11 (bullseye), glibc 2.31**.
+  cmake 3.18 → 3.30.5를 `/opt/cmake-3.30.5-linux-aarch64`에 설치(`/usr/local/bin` 링크), ninja는 apt.
+- CEF: 보드의 Chromium 130과 맞춰 `cef_binary_130.1.16+g5a7e5ed+chromium-130.0.6723.117_linuxarm64_minimal`
+  을 `/opt/cef/`에 설치 (glibc 2.31에서 정상 동작).
+- 빌드 디렉터리: `~/build/cef_mpp/{rk3588,rk3588-accel}` (소스 트리가 root 소유라 외부 빌드).
+- CMakeLists.txt 수정 3건 (빌드가 안 되던 버그):
+  1. `project(cef_mpp CXX)` → `C CXX` — CEF cmake가 C 컴파일러 플래그 검사를 함.
+  2. `PROJECT_ARCH=arm64` 강제 — CEF는 `CMAKE_HOST_SYSTEM_PROCESSOR == "arm64"`만 검사해
+     Linux 네이티브(`aarch64`)를 x86_64로 오인, `-m64 -march=x86-64`를 붙임.
+  3. `libcef_lib`(libcef.so) 링크 추가 — wrapper만 링크해 `cef_string_*` undefined reference.
+- **소프트웨어 경로(`--run`) 동작 확인**: enc≈60fps 유지, TS(H.264 High 1920x1080 60fps) 정상 디코드,
+  색상 정상(BGRA 순서 OK), UDP `next` 페이지 전환 OK. 정적 화면은 paint=0/s이며 CBR 8Mbps 설정에도
+  출력이 ~0.1Mbps로 떨어짐(MPP가 정적 프레임에 패딩 안 함).
+- **`--accel` 경로: OnAcceleratedPaint 콜백 0회.**
+  - 기본 옵션: `libGL error: failed to load driver: rockchip` → GPU 프로세스 초기화 실패로 종료.
+  - `--cef:use-angle=gles --cef:use-gl=angle` 또는 `gles-egl + ozone-platform=headless`: GPU 프로세스는
+    살아 있으나 `[accel]` 로그 없음 → cef#3687(Linux shared texture 미검증) 우려대로 콜백이 오지 않음.
+  - 보드 GPU 스택: 벤더 커널 6.1 + `libmali-valhall-g610-g13p0-x11-gbm`, Mesa 20.3.5.
+
+### <video> 태그 / MPP 하드웨어 디코드 연결 여부
+
+- 공식 CEF 130(Spotify 빌드): WebM(VP9) `<video>` 재생 OK(소프트웨어 디코드, renderer CPU +~55%p),
+  **H.264 mp4는 재생 불가**(검은 화면 — proprietary codec 미포함).
+- libcef.so에는 V4L2 디코더 코드가 없음(`/dev/video-dec`, `libv4l2.so` 문자열 0개).
+  VDA 관련 플래그(`--enable-accelerated-video-decode`, `CHROMIUM_USE_VDA=true` 등)를 줘도
+  GPU 프로세스가 libv4l을 로드하지 않음 → **CEF `<video>`는 MPP로 연결되지 않음**.
+- 보드의 FriendlyElec Chromium 130(`/opt/chromium.org`, 설정 `/etc/chromium.org/03-nanopi6`)은
+  wrapper로 실행 시 GPU 프로세스가 `libv4l-rkmpp.so` + `libv4l2` 로드, `/dev/mpp_service` 오픈 확인
+  → libv4l-rkmpp 경로 자체는 이 보드에서 동작. `/dev/video-dec0`은 libv4l-rkmpp용 설정 파일
+  (`codecs=VP8:VP9:H.264:H.265`).
+- CEF에서 쓰려면 같은 패치(V4L2 디코더 + libv4l 플러그인, proprietary codecs)를 적용해 CEF를 소스 빌드해야 함.
+
+### 시스템 Chromium(MPP 디코딩) 소스 출처 조사
+
+- 보드 Chromium: `chromium-browser-stable 130.0.6723.58` (`refs/branch-heads/6723@{#1353}`),
+  바이너리에 "Rockchip Media Player" 문자열 → Rockchip(JeffyCN) 계열 패치 적용 빌드. FriendlyElec 자체 소스는 미확인.
+- 동일 계열 130 패치 공개본: https://github.com/amazingfate/chromium-debian-build/tree/rockchip-rkmpp-130
+  (Chromium 130.0.6723.116, `debian/patches/rkmpp/` 20개 — 0001 V4L2 video decoder HACK,
+  0003/0004 libv4l2 stubs/plugins, 0016 Mali DDK X11 config, 0019 NV12 direct rendering 등)
+  - gn args (debian/rules, arm64): `use_v4l2_codec=true use_vaapi=false use_v4lplugin=true`
+    + `proprietary_codecs=true ffmpeg_branding="Chrome"`
+- 원 패치 저장소: https://github.com/JeffyCN/meta-rockchip (dynamic-layers/recipes-browser/chromium,
+  현재 master는 148~152 버전만 유지)
+- 우리 CEF 130.1.16 = Chromium **130.0.6723.117** → 위 130 패치셋과 거의 같은 버전이라 CEF 소스 빌드 시
+  chromium/src에 적용 가능성 높음(미검증).
+
+### 영상 합성 경로 구현 (A 방식: HTML UI는 CEF, 영상은 네이티브 MPP) — libcef 재빌드 불필요
+
+- 공식 CEF 130.1.16 그대로. `<video>` 대신 페이지 JSON의 `"video"`(+`"videoRect"`)로 앱이 직접 재생.
+- 신규: `video_source.{h,cpp}` (libavformat 분리 + h264/hevc_mp4toannexb → MPP 디코딩, 원본 fps 페이싱, 반복 재생),
+  `dma_heap_buf.h` (/dev/dma_heap/system-dma32 할당).
+- `mpp_encoder`: `UploadUi()`(UI 변경 시만 dmabuf로 복사), `Compose()` — RGA 3단계(fd 기반):
+  영상 NV12 → BGRA 캔버스(비율 유지) → UI 알파 합성(`SRC_OVER|PRE_MUL`) → NV12(인코더 입력).
+  인코더 버퍼 그룹에 `MPP_BUFFER_FLAGS_DMA32` 추가.
+- `main.cpp`: cefQuery `video:play:<경로>` / `video:stop` / `video:rect:x,y,w,h`, OSR 배경 투명
+  (`background_color` ARGB 0), 인코딩 루프에서 영상 재생 중이면 합성 경로 사용.
+- `player.html`: 페이지 `video` 있으면 재생 요청, 없으면 정지. `bg:"transparent"`가 `html`에도 적용되도록 수정.
+- 결과 (girsday.mp4 1080p H.264 + HTML 자막/티커/LIVE, 1080p60 출력): enc 60fps, 합성 정상(반투명 포함),
+  **전체 CPU 약 16%**(top 기준). 비교: 시스템 Chromium+ximagesrc 약 23%, 기존 CEF(720p VP9 SW 디코드) 약 33%.
+  스레드: 브라우저 메인(OnPaint 복사) 17%, cg-encode(업로드+RGA+MPP) 16%, VizCompositor 15%, 렌더러 13+11%.
+
+### 하단 티커 끊김 원인과 수정 (OnPaint 동기 인코딩)
+
+- 증상: 티커가 매끄럽게 흐르지 않음. 출력 TS에서 티커 줄의 프레임 간 이동량 측정 결과
+  (정상은 매 프레임 4px): **4px 114 / 0px 93 / 8px 92** (299프레임) — 성능이 아니라 **박자 문제**.
+  CEF는 자체 60Hz로 매 프레임 그리는데(paint=60/s), 인코더는 별도 60Hz 타이머로 최신 그림을 가져가서
+  두 시계가 어긋나 "같은 그림 2번 → 다음에 1장 건너뜀"이 반복됨.
+- 시도 1: CEF 외부 BeginFrame(`external_begin_frame_enabled` + `SendExternalBeginFrame`)으로 인코딩 틱마다
+  1장 요청 → CEF가 한 번에 1장만 처리해 렌더 지연(>16.7ms) 때 요청을 버림: paint 37~48/s, 오히려 악화 → 폐기.
+- 적용: **OnPaint 도착에 맞춰 인코딩** (EncodeLoop가 condition_variable로 새 그림을 기다렸다가 인코딩,
+  정지 화면이면 1.5주기 후 반복 인코딩). 결과 **4px 275 / 0px 12 / 8px 12** (92% 정상), enc 60fps.
+  `--no-sync`로 기존 고정 타이머 방식, `--paint-fps`가 60 미만이면 자동으로 타이머 방식.
+- (위 방식은 아래 지터 버퍼로 대체됨)
+- 최종: **UI 지터 버퍼(2장)** — OnPaint 그림을 큐에 쌓고(최대 3장, 넘치면 가장 오래된 것 버림), 인코더는 고정 60Hz
+  타이머로 2장 쌓인 뒤부터 매 틱 1장씩 꺼냄(1장만 있어도 2프레임 넘게 기다렸으면 출력 — 정지 화면 대응).
+  추가 지연 약 33ms(최대 50ms). 결과 **4px 419/419 (100%)** ×2회, 정지 페이지 60fps 정상.
+  `[stat]`에 `uiq`(큐 길이) `under`(비었던 횟수) `drop`(넘쳐 버린 수) 표시. `--no-sync`는 최신 그림 방식(지연 0).
+  CEF와 인코더 시계의 미세한 차이로 장시간 운용 시 드물게 under/drop 1회(1프레임 반복/건너뜀)는 생길 수 있음.
+
+### 지터 버퍼 3장 조정 + 남은 끊김 원인 (진행 중 메모)
+
+- 조정: `kUiPrime=3`(지연 약 50ms), `kUiMax=5`, 큐가 비어도 다시 쌓일 때까지 기다리지 않음(1번만 반복),
+  목표 수위(3) 초과가 1초 넘게 지속되면 1장 버려 지연 복귀. `under`는 "최근 2프레임 안에 그림이 왔는데 큐가 빔"
+  (애니메이션 중 늦음)만 셈 → 정지 화면은 제외.
+- 5.5분 무간섭 측정(image_project): **under 26 / drop 0**, enc 평균 60.010fps, **CEF paint 평균 59.927/s**
+  (19,776장/330초), uiq 분포 0:7 1:83 2:232 3:10. (이전 2장 버퍼 6.5분: under 28 / drop 12)
+- 해석: 빠진 그림 수(330초 × 0.083 ≈ 27)가 under(26)와 일치 → **CEF가 부하로 가끔 1프레임을 건너뜀**.
+  CEF가 건너뛴 순간 애니메이션은 이미 2칸 진행돼 있으므로 우리 쪽 버퍼로는 없앨 수 없음
+  (버퍼는 도착 간격 흔들림까지만 흡수 — 이번 조정으로 drop 0 달성).
+- 대응(진행 중): 페이지 렌더링 부하 줄이기 — `build/image_project.json` CSS 수정
+  (원본은 `build/image_project.before.json`에 보관)
+  - 영상 둘레 남색 배경: `box-shadow: 0 0 0 4000px` → 배경 div 4개(위/왼쪽/오른쪽/아래)
+  - 티커: `left` 애니메이션 → `transform: translateX` + `will-change: transform`
+  - 썸네일 확대·이름 자막에 `will-change: transform` (별도 레이어)
+  - 12초 녹화: 티커 4px 417/419.
+  - 5.5분 측정: **under 20 / drop 1**, paint 평균 59.936/s, enc 60.010, uiq 0:4 1:90 2:217 3:19.
+    **전체 CPU 약 20% → 약 14%**(60초 시점 top). 끊김은 26 → 20으로 조금 감소 — CEF가 여전히 약 0.06장/초 누락.
+    VizCompositor 스레드가 여전히 가장 큼(약 53%, 1코어 기준) → 남은 누락은 CEF 소프트웨어 합성 부하로 추정.
+- TODO: README/주석의 "2장(33ms)" 설명을 3장(50ms)으로 갱신.
+
+### HDMI 입력(hdmirx) 라이브 소스 합성
+
+- 하드웨어: CM3588 HDMI IN = `/dev/video20` (rk_hdmirx, V4L2 멀티플레인, 포맷 BGR3/NV24/NV16/NV12 — 입력 신호 따라 결정).
+  시험 입력: 3840x2160 59.94fps NV12.
+- 신규 `hdmirx_source.{h,cpp}`: QUERY/S_DV_TIMINGS → G_FMT → REQBUFS(MMAP 4) → EXPBUF(dmabuf) → STREAMON,
+  poll 로 DQBUF 해 최신 버퍼 보관(이전 버퍼는 QBUF 반환), `V4L2_EVENT_SOURCE_CHANGE`/2초 무프레임 시 재연결,
+  신호 없으면 0.5초마다 재시도. 페이지 `"video": "hdmirx"`로 사용. `VideoFrameRef.format`(RK_FORMAT_*) 추가.
+- 첫 시험: 4K 입력에서 enc 53~57fps, uiq=5 drop 30 — RGA 4단계(검정 채움/축소/블렌드/NV12)가 16.7ms 초과.
+- 개선: **RGA 2단계** — 캔버스에는 영상만(검정 채움은 영역 변경 시만),
+  `imcomposite(UI, 캔버스, NV12 dst, SRC_OVER|PRE_MUL)`로 합성+변환 한 번에(이 보드 RGA에서 동작 확인,
+  실패 시 blend+cvt 자동 대체). `[stat]`에 `rga=평균ms` 추가.
+  결과: **4K HDMI 입력 enc 60fps, rga 8.5ms, drop 0, 전체 CPU 약 15%**. mp4 1080p 구성은 rga 3.3ms.
+- 소스 전환 시험(`build/two_page_project.json`: 1p mp4, 2p hdmirx): next → hdmirx, prev → mp4 정상 전환,
+  전환 중에도 enc 60fps.
+- `cgctl.sh` 추가: SSH 에서 `./cgctl.sh next|prev|goto N|quit|status` (UDP 127.0.0.1:5555).
+- 기존 TODO(README "2장(33ms)" → 3장(50ms)) 반영 완료.
+
+### FFmpeg 라이브러리 출처
+
+- `CMakeLists.txt`가 `pkg_check_modules(FFMPEG ... libavformat libavcodec libavutil)`로 링크하는 FFmpeg는
+  별도로 받아오거나 소스빌드한 게 아니라 **apt로 설치된 시스템 패키지**(`libavformat-dev` 등).
+- 버전: `7:4.3.4-1rockchip-r6-b230628` — 이름 그대로 **Rockchip이 커스터마이징한 빌드**이며,
+  데비안 보안 저장소의 표준 `4.3.9`/`4.3.7`보다 우선순위(pin priority 100, 로컬/벤더 저장소)가 높게 잡혀 있어
+  `apt install`만으로 이 버전이 선택됨. `ffmpeg`(CLI)도 같은 소스의 동일 버전.
+
+### [cg-editor] 메인 메뉴가 바깥을 눌러도 닫히지 않는 문제
+- 증상: 상단 메뉴(파일/편집/보기 …)를 열고 다른 곳을 눌러도 드롭다운이 계속 열려 있음.
+- 원인: [app/page.tsx](src/cg-editor/app/page.tsx)의 메뉴는 메뉴 버튼 토글(`setMenu(menu===name?null:name)`)과 항목 선택 시에만 닫혔고, 바깥 클릭 처리가 없었음.
+- 변경: `menu`가 열려 있는 동안 동작하는 `useEffect` 추가 (`openModal` 바로 위).
+  - `pointerdown` / `mousedown` / `touchstart`(capture)에서 대상이 `.menugroup` 밖이면 `setMenu(null)`
+  - `Escape` 키, 창 `blur` 시에도 닫힘
+  - 실행 취소/다시 실행 기록(history) 로직은 변경하지 않음
+- 확인: 개발 서버(5173)가 수정된 코드를 서빙하는 것과 VS Code 진단 오류 없음까지 확인.
+- 미해결: 사용자가 "메뉴를 두 번 눌러야 없어진다"고 보고. 브라우저에서 직접 재현하지 못해 원인 미확정.
+  - 확인 필요: 강력 새로고침(Ctrl+Shift+R) 후에도 동일한지, 바깥 클릭(a)인지 메뉴 버튼 재클릭(b)인지, 어느 영역(캔버스/패널/툴바)에서 발생하는지.
+
+### [cg-editor] 참고
+- `src/editor/client/src/TopBar.jsx`에도 별도의 상단 메뉴가 있으나(헤더에서 마우스가 벗어나면 닫힘) 이번에는 수정하지 않음.
+
+## 2026-09-29
+
+### 프로젝트 통합
+
+- `C:\Users\ssang\Downloads\files`에 있던 두 예제(최상위 느슨한 파일 세트 `main.cpp`/
+  `mpp_encoder.*`/`CMakeLists.txt`/`README.md`와, `cef_mpp.zip`을 풀어놓은
+  `cef_mpp/` 폴더)를 diff로 비교 → 소스는 완전히 동일하고, `cef_mpp/` 쪽만
+  `ts_muxer.*`와 저작/재생용 `web/`(editor.html, player.html, GrapesJS)을
+  추가로 포함한 완전한 버전임을 확인.
+- 완전한 `cef_mpp/` 트리를 이 저장소의 `zcgserver/`로 복사해 단일 프로젝트로
+  구성 (이후 사용자가 `test_cef_mpp/` 하위 폴더로 재배치, `.vscode/settings.json`의
+  `cmake.sourceDirectory`가 이를 가리킴).
+
+### main.cpp 모드 구분 리팩터
+
+- 흩어져 있던 `bool g_run_mode` / `bool g_accel` 전역 플래그를
+  `enum class AppMode { kEdit, kRun }`, `enum class PaintMode { kSoftware, kAccel }`로
+  교체 ([main.cpp:46-53](test_cef_mpp/main.cpp#L46-L53)).
+- `OnPaint`(소프트웨어, [main.cpp:111-124](test_cef_mpp/main.cpp#L111-L124)), `OnAcceleratedPaint`
+  (dmabuf 실험, `#ifdef CG_ACCEL`, [main.cpp:126-164](test_cef_mpp/main.cpp#L126-L164)),
+  `main()`의 edit/run 분기([main.cpp:420-456](test_cef_mpp/main.cpp#L420-L456))에
+  `// ===== [MODE] =====` 주석 블록을 달아 어느 코드가 어느 모드에 속하는지 명시.
+- 런타임 로그(`[cg] run: ... paint=software|accel`)에도 현재 PaintMode 표기 추가.
+
+### 빌드 환경 문서화 (env.md) + RK3588 CMake 프리셋
+
+- `test_cef_mpp/env.md` 신규 작성: 대상 보드(RK3588, Debian 12 arm64,
+  **네이티브 빌드** — 크로스컴파일 아님), 필수 apt 패키지, CEF linuxarm64
+  바이너리 배치 방법과 `CEF_ROOT` 환경변수 관례, 빌드/실행 명령, 실기 미검증
+  제약 사항을 정리.
+- `test_cef_mpp/CMakePresets.json` 신규 작성: VSCode CMake Tools에서 바로 고를 수
+  있는 두 구성 제공.
+  - `rk3588` — 기본 소프트웨어 `OnPaint` 경로 (`build/rk3588/`)
+  - `rk3588-accel` — `ENABLE_ACCEL_PAINT=ON`을 자동 설정하는 `--accel` dmabuf
+    실험 경로 (`build/rk3588-accel/`), `rk3588`을 `inherits`
+  - 둘 다 `CEF_ROOT`는 하드코딩하지 않고 `$env{CEF_ROOT}`를 읽도록 함
+  - `condition: hostSystemName == Linux`로 걸어 Windows에서 실수로 구성 못 하게 함
+
+### OnAcceleratedPaint 호출 가능성 검토 (미해결 — 실기 필요)
+
+`--accel`(dmabuf 제로카피, [main.cpp:130](test_cef_mpp/main.cpp#L130))이 실제로 호출되려면
+3단계가 전부 맞아야 함을 확인:
+
+1. 컴파일 타임: `rk3588-accel` 프리셋(`CG_ACCEL` 정의)으로 빌드해야 함수 자체가 포함됨.
+2. 런타임: `--accel` 플래그로 `PaintMode::kAccel`이 되어야
+   `wi.shared_texture_enabled = true`([main.cpp:429](test_cef_mpp/main.cpp#L429))가 걸리고
+   GPU가 꺼지지 않음([main.cpp:242](test_cef_mpp/main.cpp#L242)).
+3. **미검증**: CEF의 GPU 프로세스가 RK3588 Mali 드라이버 위에서 실제로
+   OSR용 공유 텍스처(dmabuf)를 만들어내야 콜백이 옴. Mali는 기본적으로 AFBC
+   압축 버퍼를 만드는 경우가 많은데, 코드는 `modifier`가 linear가 아니면
+   해당 프레임을 그냥 버림([main.cpp:147-158](test_cef_mpp/main.cpp#L147-L158)) → AFBC를
+   못 끄면 이 경로가 계속 `accel_fail`만 쌓일 가능성.
+
+결론: 소프트웨어 경로(`rk3588`)는 그대로 동작할 가능성이 높으나, `--accel`은
+설계상 가능한 구조일 뿐 보드에서 직접 돌려 `[accel] planes=...` 로그가
+찍히는지 확인하기 전까지는 실제 호출 여부를 알 수 없음(README의 "콜백이
+전혀 안 오면 `chrome://gpu` 확인" 안내와 일치). **다음 실기 검증 시 이 로그부터
+확인할 것.**
+
+### CEF 공식 문서/이슈 조사 — ARM/Mali 선례 없음, Linux 자체가 미검증
+
+웹 검색으로 확인한 사실 (자세한 내용은 [test_cef_mpp/env.md](test_cef_mpp/env.md)의
+"`--accel` 실기 검증 체크리스트" 절 참고):
+
+- CEF 공식 ARM64 빌드 문서(BranchesAndBuilding, `tools/gn_args.py`)는 sysroot/GN
+  인자 등 **컴파일 절차**만 다루고, Mali GPU나 dmabuf/AFBC 관련 내용은 없음.
+- Windows는 D3D11 기반 shared texture가 CEF 71부터 **공식 지원**되지만, Linux는
+  CEF 팀이 이슈 트래커에서 직접 "존재는 하지만 cefclient 참고 구현이 없어 검증된 적
+  없다"고 밝힌 상태([cef#3687](https://github.com/chromiumembedded/cef/issues/3687)) —
+  즉 `shared_texture_enabled`를 켜도 Linux에서는 조용히 `OnPaint`로 폴백될 수 있음.
+- ARM64로 포팅된 참고 구현은 없음. 가장 가까운 예시인 java-cef PR #524도 x86 Linux
+  기준이고 RK3588/Mali 검증 사례는 전무.
+- NVIDIA proprietary 드라이버에서도 GBM/dmabuf 관련 버그가 최근까지 보고됨
+  ([cef#4237](https://github.com/chromiumembedded/cef/issues/4237)) — x86+주요 벤더
+  조합도 아직 불안정, RK3588+Mali는 더더욱 선례 없는 조합.
+- Chromium 자체는 99버전부터 `--use-angle=gl-egl --headless`로 헤드리스 GPU 렌더링을
+  지원하고, RK3588의 오픈소스 Mali 드라이버 Panfrost도 대체로 가속이 되는 편으로
+  알려져 있음 — 이 레이어(OpenGL/EGL 자체가 되는지)는 CEF와 별개로 먼저 확인 가능.
+
+이에 따라 env.md에 실기에서 어디를 봐야 하는지(①GPU 드라이버 → ②CEF GPU 프로세스
+→ ③앱 자체 `[accel]`/`accel_fail` 로그) 3단계 체크리스트를 추가함.
+
+### Armbian 포럼 실사용 사례 (Orange Pi 5 / RK3588) 반영
+
+사용자가 제공한 [armbian forum 글](https://forum.armbian.com/topic/26188-hardware-acceleration-with-chromium)을
+조사해 env.md의 필수 패키지/체크리스트에 반영:
+
+- 실제로 RK3588에서 Chromium GPU 가속(4K 유튜브 CPU 10~15%까지 낮춘 성공 사례 등)을
+  이룬 보고가 존재함 — 단 바닐라 Debian/Ubuntu 저장소 Mesa/Panfrost가 아니라
+  `mali-g610-firmware` + RK3588 전용 패치가 들어간 Panfrost 포크("panfork-mesa",
+  `ppa:liujianfeng1994/panfork-mesa`)를 썼을 때 얘기임.
+- **Wayland 세션이 사실상 필수**였다는 보고 다수 — X11에서는 문제 발생, Wayland로
+  전환 후 해결. 우리 앱은 디스플레이 서버 없는 완전 헤드리스를 가정했는데, GPU 합성이
+  Wayland 컴포지터 존재 자체에 의존할 가능성이 새로 제기됨 — 헤드리스 Weston 같은
+  걸 같이 띄워야 할 수도 있다는 뜻이라 실기 검증 항목에 추가.
+- `apt upgrade`가 GPU 드라이버를 깨뜨린 사례, `libva`(VAAPI)는 RK3588 미지원(우리는
+  MPP/RGA를 직접 쓰므로 무관) 등도 확인.
+- env.md "필수 패키지"와 "`--accel` 실기 검증 체크리스트" 1단계에 위 내용을 반영함.
+
+### Armbian 포럼 추가 조사 — 커널별 드라이버 갈림길 (중요)
+
+같은 포럼에서 관련 스레드를 더 찾아봄:
+
+- **["Expected default graphics acceleration for RK3588?" (2025-11~12)](https://forum.armbian.com/topic/56374-expected-default-graphics-acceleration-for-rk3588/)**
+  — Mali-G610은 커널에 따라 배타적인 두 경로로 갈림:
+  - 벤더 6.1 BSP 커널 + `libmali`(proprietary): NPU 지원, GPU는 "기본" 수준
+  - 메인라인 6.12~6.18 커널 + `Panthor`(오픈소스): GPU 완전 가속, NPU 미지원
+  - 우리는 NPU 불필요 → 목표는 Panthor+메인라인 6.12+ 커널이지만, 보드 벤더 이미지는
+    보통 6.1 BSP인 경우가 많아 `uname -r` 확인이 먼저 필요.
+  - **Armbian 관리자 Igor**: "(이 가속 경로는) 6.1 + 데스크톱(Gnome) 빌드에서만
+    작동 확인됐다"는 취지로 언급 — 헤드리스 서버 구성 자체가 커뮤니티에서 검증 안
+    된 조합일 가능성을 시사.
+- **["How to setup libwc--or any alternative wayland compositors?"](https://forum.armbian.com/topic/29604-how-to-setup-libwc-or-any-alternative-wayland-compositors/)**
+  — 디스플레이 없는 헤드리스 Wayland 컴포지터(`weston --backend=headless` 등) 구성의
+  구체적인 성공 사례를 찾지 못함. 주로 패키지 의존성 빌드 에러 해결에 그침 —
+  "헤드리스+GPU가속" 조합은 커뮤니티에서도 미해결/미검증 영역으로 보임.
+
+즉 지난번 파악한 "Wayland가 필요할 수 있다"는 사실에서 한 걸음 더 나아가, **어떤
+커널을 쓰느냐(벤더 6.1 vs 메인라인 6.12+)에 따라 드라이버 자체가 바뀌고, 게다가
+검증된 사례들은 전부 헤드리스가 아니라 데스크톱(Gnome) 환경**이라는 게 확인됨.
+env.md 체크리스트 1단계에 커널 확인(`uname -r`)과 드라이버 경로 표, 이 위험
+요소를 추가함.
+
+### Radxa 공식 문서/포럼 조사 — 상대적으로 긍정적인 신호
+
+Armbian(커뮤니티 빌드) 대신 **Radxa 공식 문서/포럼**([Switch GPU driver](https://docs.radxa.com/en/rock5/rock5c/radxa-os/mali-gpu),
+[Hardware Acceleration in Chromium using Debian](https://forum.radxa.com/t/hardware-acceleration-in-chromium-using-debian/8216))
+을 확인:
+
+- Debian 12(Bookworm) 기반 **Radxa OS는 Panthor(오픈소스)가 기본값** — 벤더 BSP
+  커널에도 Panthor 패치가 이미 백포트된 것으로 보임. 지난번 Armbian 글의 "6.1 벤더
+  커널=libmali만 가능"이라는 전제가 보드/이미지에 따라 다를 수 있음을 시사.
+- Mali 블롭 전환 시 패키지명이 `libmali-valhall-g610-g24p0-x11-wayland-gbm` 형태 —
+  접미사에 **`gbm`**(디스플레이 서버 없는 오프스크린 렌더링 표준 인터페이스)이 포함된
+  변형이 공식적으로 존재함. 우리 헤드리스 CEF 앱과 개념적으로 가장 가까운 조합이라
+  주목할 만하나, 이 블롭의 정확한 OpenGL/Vulkan 지원 범위는 문서를 직접 열어 재확인 필요.
+- **Panthor가 2024-07에 Radxa Rock 5B에서 OpenGL ES 3.1 conformance 통과**
+  ([CNX Software](https://www.cnx-software.com/2024/07/18/panthor-open-source-driver-achieves-opengl-es-3-1-conformance-with-arm-mali-g610-gpu-rk3588-soc/))
+  — 지금까지 찾은 실패/미성숙 사례(Armbian Orange Pi 5 2023, Radxa ROCK 4 2021~2022)는
+  전부 이 conformance 이전 시점 글이라, 현재(2026) 기준으로는 실제 상황이 그때보다
+  나을 가능성이 있음. 다만 "헤드리스에서 검증됐다"는 사례는 Radxa 쪽에서도 못 찾음 —
+  이 부분은 여전히 실기에서 직접 확인해야 함.
+
+env.md의 같은 체크리스트 절에 이 내용을 추가함.
+
+### Radxa / Orange Pi / FriendlyElec / Armbian 종합 조사 + CEF 자체 버그 (중요 — 기존 결론 일부 뒤집힘)
+
+사용자 요청으로 3개 주요 RK3588 벤더(Radxa, Orange Pi, FriendlyElec)를 추가로
+찾아보고, Armbian 커뮤니티의 가장 최신 글까지 확인함. env.md의
+"`--accel` 실기 검증 체크리스트"를 벤더별 표 형태로 재구성함. 핵심 변경/추가 사항:
+
+- **CEF와 Mali GPU를 직접 연결한 자료는 어디에도 없음.** Radxa/Orange Pi/FriendlyElec/
+  Armbian 전부 "브라우저 Chromium"(유튜브 재생 등) 얘기만 하고 CEF의 OSR/
+  `OnAcceleratedPaint`는 언급이 없음 — 이건 CEF 자체 이슈 트래커에서만 다뤄지는
+  영역이고, 거기서도 RK3588/Mali 특정 사례는 없음.
+- **새로 발견한 CEF 자체 버그**: [cef#2618](https://bitbucket.org/chromiumembedded/cef/issues/2618/onacceleratedpaint-is-not-called-with-off)
+  — `--off-screen-rendering-enabled --shared-texture-enabled --external-begin-frame-enabled`를
+  다 켜도 `OnAcceleratedPaint`가 호출되지 않는 사례가 보고된 적 있음. 하드웨어와
+  무관한, CEF 버전 자체의 신뢰성 문제.
+- **FriendlyElec**: Ubuntu 24.04 데스크톱 이미지는 Wayland+VPU/GPU 가속+Chromium을
+  공식 통합해서 제공(구형 Xubuntu 이미지는 X11+Panfrost). "가속이 되는 이미지는
+  Wayland 전제"라는 패턴이 FriendlyElec에서도 반복 확인됨.
+- **`mali_kbase` 커널 모듈 충돌**: 벤더 커널의 `mali_kbase` 모듈이 로드돼 있으면
+  GPU를 선점해서 Panthor/Panfrost가 아예 바인딩을 못 함 — 실기에서
+  `lsmod | grep mali_kbase`로 확인 필요한 항목으로 체크리스트에 추가.
+- **"Panthor는 Wayland 미지원"이라는 상반된 보고**도 있었는데, 이는 우리 코드가 이미
+  대비 중인 AFBC(압축 버퍼) modifier 문제와 같은 종류로 추정됨 — Panthor가 만드는
+  압축 버퍼를 컴포지터가 못 받아서 생기는 문제일 가능성.
+- **⚠️ 가장 중요한 변경**: [Armbian "Setting Up Mali & HW Accel" (2025-05~11, 지금까지
+  찾은 것 중 가장 최신)](https://forum.armbian.com/topic/51939-rk3588-setting-up-mali-hardware-acceleration/)에서
+  관리자 Werner가 **"벤더 6.1.y 커널로 되돌리고 Panthor를 끈 뒤 proprietary
+  `libmali`를 쓰라"**고 권고함 — 이전에 우리가 "목표"로 삼았던 "Panthor+메인라인
+  커널이 정답"이라는 방향과 **정반대**. 즉 2024-07 conformance 소식만 보고 Panthor를
+  최선으로 단정하면 안 되고, 실기에서는 Panthor와 libmali 두 경로를 **둘 다 시도해볼
+  준비**를 해야 한다는 결론으로 수정함.
+
+이 모든 내용을 env.md 체크리스트에 "벤더별 조사 요약" 표 + "알아둘 함정" 절로
+재구성해 반영함.
