@@ -2,6 +2,47 @@
 
 Debian 11 시절 기록은 `readme-history-d11.md` 참고.
 
+## 2026-10-05
+
+### 1) 60fps 틱 조사 — CEF/인코더 틱의 성격, 다른 CG 서버(CasparCG·OBS·vMix)와 비교 (코드 수정 없음)
+
+#### 현재 구조
+- 인코딩 틱은 `EncodeLoop`(`main.cpp`)의 `sleep_until(next)`(소프트웨어 타이머, `next += period` 절대 시각 누적). 한 주기 이상 늦으면 `next = tick_now` 로 리셋(밀린 틱을 몰아 실행하지 않음).
+- CEF 틱은 `windowless_frame_rate`(CEF 내부 합성 타이머). `--gpu --cef:use-angle=gles-egl` 로 GPU 렌더링을 해도 틱 소스가 HW vsync 로 바뀌지는 않는다(OSR 에는 디스플레이 vsync 가 없고 Chromium 의 DelayBasedTimeSource 계열 타이머로 동작 — 문서 기반 추정, CEF 소스는 직접 확인 못 함). GPU 는 그리는 시간을 짧고 일정하게 해 `paint=60/s` 가 맞게 해 줄 뿐.
+- 두 시계(CEF 60Hz / EncodeLoop 60Hz)가 별개라 박자가 어긋나는 것을 지터 버퍼(`kUiPrime`=5)가 흡수.
+
+#### 이 단말에서 쓸 수 있는 HW 시계 후보 (현재 틱에는 미사용)
+- DRM vblank(HDMI 출력): `drm_out.cpp` 의 `drmModeAtomicCommit` 이 이미 다음 vblank 까지 블록. HDMI 출력이 켜졌을 때(output=1/3)만 가능, UDP 단독(output=2)이면 없음.
+- HDMI-RX 프레임 도착(`hdmirx_source.cpp` 의 `VIDIOC_DQBUF`): 입력 신호가 있을 때만.
+- ALSA 오디오 클럭(48kHz, 60fps=800샘플).
+- 주의: HW 틱의 실제 주파수가 60.000Hz 와 다르면(59.94 등) `TsMuxer` 의 카운터 PTS 와 어긋나 수신 버퍼가 서서히 차거나 빔.
+
+#### 다른 CG 서버의 틱 (소스/포럼 확인)
+- **CasparCG**: 채널 루프는 `produce → mix → output_()` 이고 속도는 `output_()` 에서 결정. 소비자 중 `has_synchronization_clock()` 이 true 인 것(예: DeckLink)이 있으면 그 소비자의 `send()` 블록이 틱이 되고, 모두 false(예: ffmpeg 소비자)면 `sleep_until(time_ += 1e6/hz)` 로 자체 타이머 사용. 루프 스레드는 실시간 우선순위. → HW 시계는 HW 출력이 있을 때만, 없으면 `sleep_until` (현재 구현과 동일).
+- **OBS**: `video_sleep()` 의 `os_sleepto_ns()`(리눅스는 `nanosleep` 상대 시간) 로 다음 목표 시각까지 잠. vsync/HW 시계 없음.
+- **vMix**: 소스 비공개. 포럼상 내부 free-run 시계, 외부 genlock 미지원(동기가 필요하면 별도 싱크 제너레이터를 I/O 카드에 연결).
+- 결론: 방송용 SW 도 HW 출력이 없으면 SW 타이머로 틱을 만든다. UDP 단독 구성에서 현재 `sleep_until` 은 업계 일반 수준.
+
+#### 중요: OBS 의 "늦은 틱" 처리 vs 현재 코드 (`obs-video.c` `video_sleep`)
+```c
+t = cur_time + interval_ns;
+if (os_sleepto_ns(t)) { *p_time = t; count = 1; }
+else {                                   // 이미 t 가 지남 = 늦음
+  count = max(diff, interval_ns) / interval_ns;   // 지난 프레임 수
+  *p_time = cur_time + interval_ns * count;       // 시계를 count 칸 앞으로 (격자 위상 유지)
+}
+lagged_frames += count - 1;  vframe_info.count = count;
+```
+- 렌더는 **한 번만** 하고(틱을 count 번 실행하지 않음), 시계는 `interval × count` 만큼 앞으로 가므로 원래 격자 위에 남는다. 그 프레임에 `count` 를 실어 인코더가 **같은 프레임을 count 번 복제**(`queue_frame` 의 `duplicate`)해 PTS 가 연속(CFR) 유지.
+- 현재 코드(`main.cpp` 556행 부근): `if (tick_now - next >= period) next = tick_now;` → 격자 위상이 현재 시각으로 이동. 더구나 `TsMuxer` 의 영상 PTS 는 프레임 카운터(`n_`)라 늦은 틱으로 건너뛴 시간이 타임라인에서 사라지고, 오디오 PTS 는 `base_` 기준 실시간이라 **늦은 틱마다 A/V 가 한 프레임씩 어긋날 수 있다**(누적 여부는 미확인). 참고: `[stat]` 의 `enc` 가 55~60fps 로 떨어지는 구간이 있었음(위 2026-10-04 2) 항목).
+- 적용 방안(미적용) — OBS 방식을 EncodeLoop 에 옮기면:
+  1. 늦으면 `late = (tick_now - next) / period` 를 구하고 `next += period * late` 로 격자를 유지한다.
+  2. 인코딩은 한 번만 한다.
+  3. PTS 를 `n_ += 1 + late` 로 올리거나(VFR, PTS 에 구멍), 건너뛴 만큼 직전 프레임을 `late` 번 재인코딩해서 PTS 를 이어 붙인다(CFR). OBS 는 후자인 복제 방식.
+  - 둘 중 무엇이 나은지는 단말 수신 측(UDP TS 를 받는 쪽)이 VFR 을 받아들이는지에 달림 → 결정 필요.
+  - 선행 작업: `late` 횟수를 `[stat]` 에 찍어 실제 발생 빈도를 먼저 본다.
+- 참고: OBS 의 `nanosleep` 은 상대 시간이라 호출 사이 지연이 오차에 들어감. 현재의 `sleep_until` 이 이 점에서는 유리할 것으로 추정(libstdc++ 구현은 미확인).
+
 ## 2026-10-04
 
 ### 1) 단말 OS 를 Debian 12 로 변경 — 소스 구성과 컴파일 환경 구성
