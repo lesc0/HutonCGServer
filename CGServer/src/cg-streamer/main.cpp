@@ -677,7 +677,7 @@ static bool ReadOutputGeom(int& x, int& y, int& w, int& h) {
 
 // 반환: true = 화면 해상도 변경으로 다시 만들어야 함, false = 종료/실패
 // 반환: 0 = 종료/실패, 1 = 송출 모니터 영역이 바뀌어 다시 만들어야 함, 2 = 송출 모니터가 없어 창을 띄우지 않음(모니터가 생길 때까지 기다림)
-static int PreviewRun() {
+[[maybe_unused]] static int PreviewRun() {   // CG_DRM_OUT 빌드에서는 쓰이지 않음
   Display* dpy = XOpenDisplay(nullptr);
   if (!dpy) { fprintf(stderr, "[preview] XOpenDisplay 실패 (DISPLAY 필요)\n"); return 0; }
   int screen = DefaultScreen(dpy);
