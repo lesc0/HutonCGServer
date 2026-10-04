@@ -80,17 +80,32 @@ cd /home/pi/work/github.cgserver/CGServer/src/cg-streamer
 cd /home/pi/work/github.cgserver/CGServer/src/cg-editor && ./build.sh   # 최초 1회(npm ci + Next 빌드)
 cd ../../bin && DISPLAY=:0 ./start.sh      # cg-editor(8080) + cg-streamer + 키오스크 (CG_SKIP_KIOSK=1 이면 키오스크 생략)
 ```
-- 실시간 우선순위: `/etc/security/limits.d/99-cg-rt.conf` 에 `pi - rtprio 90` 설정함(새 로그인부터 적용). 엔진이 쓰려면 `bin/cgsetup.cfg` 에 `realtime=on`(현재 off).
+- 실시간 우선순위: `/etc/security/limits.d/99-cg-rt.conf` 에 `pi - rtprio 90` 설정함(새 로그인부터 적용). 엔진이 쓰려면 `bin/cgsetup.cfg` 에 `realtime=on`(보드에서 on 으로 바꿔 실행 중, FIFO 스레드 7개 확인: cg-encode·mpp_h264e 50, cg-preview 49, cg-audio·cg-hdmirx·cg-hdmi-aud 48, cg-audio-out 47).
 - 원격(ssh)에서 실행할 때 명령 줄에 `cg-streamer --run` 문자열이 들어 있으면 start.sh 가 이미 실행 중으로 오인한다.
 
 ## 기타 환경 정보
 - **미리 설치돼 있던 시스템 패키지** (OS 이미지 기본): rockchip 빌드 ffmpeg 5.1.6, librockchip-mpp 20260226-2, librga 2.2.0-1, libv4l-rkmpp, gstreamer1.0-rockchip1, `chromium-browser-stable 143.0.7499.40`(`/opt/chromium.org/stable/chromium-browser`, 키오스크용). 이 패키지들은 apt 로 다시 설치하지 않는다.
 - **화면**: lightdm + Xorg(:0) + xfwm4 데스크톱이 떠 있다. HDMI-1 = 에디터 화면(1024x600), HDMI-2 = 송출 모니터(미연결이면 `disconnected` 로 보이고 출력 없음). 연결 상태는 `/sys/class/drm/card0-HDMI-A-{1,2}/status`, `xrandr` 로 확인.
-- **송출 설정** `bin/cgsetup.cfg`: `output=3`(로컬 미리보기 포함), `editor_display=HDMI-1`, `output_display=HDMI-2`, `editor_kiosk=off`(on 이면 start.sh 가 Chromium 키오스크로 에디터를 띄움), `realtime=off`, `udp_ip/udp_port`, `fps=60`, `editor_port=8080`.
+- **송출 설정** `bin/cgsetup.cfg`: `output=3`(로컬 미리보기 포함), `editor_display=HDMI-1`, `output_display=HDMI-2`, `editor_kiosk=off`(on 이면 start.sh 가 Chromium 키오스크로 에디터를 띄움), `realtime=on`(보드 로컬 변경, 아직 커밋 안 함), `udp_ip/udp_port`, `fps=60`, `editor_port=8080`.
 - **cg-editor**: `src/cg-editor/build.sh` 결과는 `src/cg-editor/.next/` 와 `node_modules/`(둘 다 git 제외), 운영 모드 포트 8080. 빌드 결과·로그는 `build/rk3588-release/`, `bin/log/`.
 - **재부팅**: 자동 시작 설정은 없다. 재부팅하면 `DISPLAY=:0 bin/start.sh` 를 다시 실행해야 한다(`ulimit -r`=90 은 유지됨).
 - **PC 에서 단말 접속**: ssh 비밀번호 로그인(키 등록 없음). 단말 계정 `pi` 는 `sudo` 가능(비밀번호는 `readme-test.txt`).
 - **참고(`/home/pi/work`)**: `github.cgserver`(소스), `final`(최종 소스 tgz 풀어 둔 것, 참고용), 기존 `install_trzsz.sh`.
+
+## 화면 잠금/절전 끄기 (보드 로컬 설정, git 에 없음)
+송출 모니터에는 입력이 없어서 화면 잠금이 걸리면 **데스크톱 세션이 비활성(로그인 화면으로 전환)** 되어 `cg-preview` 창이 그려지고 있어도(`drawn=60/s`) 모니터에 안 보인다. (증상: 프로세스·로그는 정상인데 HDMI 에 아무것도 안 나옴, `loginctl show-session 1 -p Active` 가 `no`, `light-locker` 1024x600 창이 viewable)
+- 이미 설정함 (`pi` 계정):
+  - `~/.config/autostart/light-locker.desktop`, `xscreensaver.desktop` 에 `Hidden=true` (자동 시작 끔), 실행 중이던 `light-locker` 종료
+  - xfce4-power-manager: `dpms-enabled=false`, `blank-on-ac=0`, `dpms-on-ac-sleep=0`, `dpms-on-ac-off=0`, `lock-screen-suspend-hibernate=false`
+  - `~/.config/autostart/no-screen-blank.desktop` : 로그인 때마다 `xset s off; xset s noblank; xset -dpms`
+- 확인: `DISPLAY=:0 xset q | grep -A1 -E "Screen Saver|DPMS"` → `prefer blanking: no`, `DPMS is Disabled`. (재부팅 후 유지되는지는 아직 미확인)
+- 이미 잠겨 버렸을 때 복구(ssh): `sudo loginctl unlock-session 1 && sudo loginctl activate 1` (일반 사용자로는 인증 필요 오류). 세션 번호는 `loginctl list-sessions` 로 확인.
+- HDMI 포트가 바뀌어도(HDMI-1 ↔ HDMI-2) 같은 증상이 날 수 있으니 `/sys/class/drm/card0-HDMI-A-*/status` 와 `xrandr` 로 연결 상태부터 확인.
+
+## 성능 참고 (로그 `[stat]` 읽는 법)
+- `drop` = UI 지터 버퍼(CEF OnPaint 그림 큐)에서 버려진 그림 수 누적. 인코더/패킷 드롭이 아님. 큐 수위(`uiq`)가 목표(`kUiPrime=5`)를 1초 넘게 넘으면 1장씩(main.cpp:593), 8장(`kUiMax`)을 넘으면 즉시(main.cpp:291) 버림.
+- 정상값(Debian 11 기록): `enc≈60.0fps`, `paint≈59.9/s`, `uiq 0~3`, `drop 0~1`(5.5분). **Debian 12 에서 4K HDMI 입력(3840x2160@59.94)을 합성할 때** `enc 55~60`, `paint 60~66`, `uiq 7~8`, `drop 초당 약 1.4장` 으로 달라짐(원인 조사 중: 인코딩 루프가 60Hz 를 못 지켜 큐가 참).
+- GPU 모드: `--gpu --cef:use-angle=gles-egl` 로 실행 중(gpu-process 확인, paint=60/s). 로그에 GPU 이름은 찍히지 않음.
 
 ## PC(Windows) 쪽
 - 작업 폴더 `D:\zPrj26-Huton-MediaServer\github.HutonCGServer\CGServer`, 원격 `https://github.com/lesc0/HutonCGServer.git`

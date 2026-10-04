@@ -48,6 +48,13 @@ Debian 11 시절 기록은 `readme-history-d11.md` 참고.
 - 데스크톱(lightdm) 세션에서 띄우는 프로세스에는 그 세션을 다시 로그인해야 적용된다.
 - 참고: 원격 명령 줄에 `cg-streamer --run` 문자열이 들어가면 start.sh 의 `pgrep -f` 가 실행 중으로 오인하므로 스크립트 파일로 나눠 실행할 것.
 
+#### realtime=on 적용, 성능 확인, 화면 잠금 해제
+- 보드 `bin/cgsetup.cfg` 를 `realtime=on` 으로 바꿔 재시작 → FIFO 스레드 7개(cg-encode·mpp_h264e 50, cg-preview 49, cg-audio·cg-hdmirx·cg-hdmi-aud 48, cg-audio-out 47) 확인. (보드 로컬 변경, 커밋 안 함)
+- GPU 모드 확인: `--gpu --cef:use-angle=gles-egl`, gpu-process 동작, paint=60/s.
+- `drop` 이 초당 약 1.4장 누적(4K HDMI 입력 합성 중, uiq 7~8, enc 55~60fps). 과거 Debian 11 기록은 `drop 0~1/5.5분`. 코드상 UI 지터 버퍼에서 버리는 것이며 원인 조사 중.
+- HDMI 에 아무것도 안 나옴: 모니터가 HDMI-2 로 바뀐 뒤 `light-locker` 화면 잠금으로 데스크톱 세션이 비활성(로그인 화면)이 되어 `cg-preview` 창이 가려짐 → `sudo loginctl unlock-session 1 && sudo loginctl activate 1` 로 복구.
+- 화면 잠금/절전 해제: light-locker·xscreensaver 자동 시작 끄기, xfce4-power-manager 의 DPMS 등 끄기, 로그인 때 `xset s off/-dpms` 적용(자세한 내용은 `readme-dev.md`).
+
 #### cg-editor 빌드와 실행
 - `src/cg-editor/build.sh`(`npm ci` + Next.js 빌드)가 Node 22 로 성공 → `.next/` 생성.
 - `bin/start.sh` 로 cg-editor(prod, 포트 8080) 기동, `http://localhost:8080/` 응답 200. cg-streamer 는 계속 실행 중. 키오스크는 생략(`CG_SKIP_KIOSK=1`).
