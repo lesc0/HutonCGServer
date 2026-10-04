@@ -1013,8 +1013,14 @@ static void DisplayWatch() {
   };
   std::string last = sig(), pending;
   int stable = 0;
+  using clk = std::chrono::steady_clock;
+  std::vector<clk::time_point> recheck;   // 연결 변경 뒤 다시 확인할 시각. 기다리는 동안에도 폴링을 멈추지 않는다(그 사이에 뽑았다 꽂으면 변경을 놓쳐 배치가 겹친 채 남았음)
   while (!g_quit) {
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    for (size_t i = 0; i < recheck.size();) {
+      if (clk::now() >= recheck[i]) { recheck.erase(recheck.begin() + i); ApplyDisplay(); }
+      else i++;
+    }
     const std::string cur = sig();
     if (cur == last) { pending.clear(); stable = 0; continue; }
     if (cur == pending) stable++;
@@ -1026,10 +1032,7 @@ static void DisplayWatch() {
       printf("[display] 모니터 연결 변경 감지(%s): 배치를 다시 계산합니다\n", cur.c_str());
       ApplyDisplay();
       // X 서버는 모니터를 꽂은 뒤 한참 뒤에 두 출력을 모두 0,0 에 겹쳐 놓기도 한다(첫 계산 결과를 덮어씀) -> 3초, 8초 뒤에 한 번씩 더 확인(이미 맞으면 아무것도 안 바뀜)
-      for (int wait_ms : {3000, 5000}) {
-        for (int w = 0; w < wait_ms / 100 && !g_quit; w++) std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        if (!g_quit) ApplyDisplay();
-      }
+      recheck = {clk::now() + std::chrono::seconds(3), clk::now() + std::chrono::seconds(8)};
     }
   }
 }
