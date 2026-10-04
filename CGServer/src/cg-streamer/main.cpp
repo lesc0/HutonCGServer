@@ -801,8 +801,7 @@ static bool XOutputGeom(Display* dpy, Window root, const std::string& name, int&
     XSetWMNormalHints(dpy, win, &nsz);
     XMoveWindow(dpy, win, nx, ny);
     XFlush(dpy);
-    printf("[preview] 창 위치만 이동 +%d+%d -> +%d+%d (다시 만들지 않음)
-", (int)g_preview_x, (int)g_preview_y, nx, ny);
+    printf("[preview] 창 위치만 이동 +%d+%d -> +%d+%d (다시 만들지 않음)\n", (int)g_preview_x, (int)g_preview_y, nx, ny);
     g_preview_x = nx;
     g_preview_y = ny;
   };
