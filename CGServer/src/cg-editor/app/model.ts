@@ -54,3 +54,15 @@ export function moveOffset(i:Item,time:number):{x:number;y:number}{
 const FONT_LABELS:Record<string,string>={NanumGothic:'나눔고딕',NanumMyeongjo:'나눔명조',NanumPenScript:'나눔펜스크립트',GowunDodum:'고운돋움',GowunBatang:'고운바탕',BlackHanSans:'블랙한산스',DoHyeon:'도현',Jua:'주아',Gugi:'구기',YeonSung:'연성',Gaegu:'개구',PoorStory:'푸어스토리',HiMelody:'하이멜로디',NotoSansKR:'Noto Sans KR',GothicA1:'Gothic A1',IBMPlexSansKR:'IBM Plex Sans KR',Pretendard:'Pretendard',SpoqaHanSansNeo:'Spoqa Han Sans Neo','sans-serif':'기본 고딕(sans-serif)',serif:'기본 명조(serif)'};
 const WEIGHT_LABELS:Record<string,string>={Thin:'Thin',ExtraLight:'Extra Light',Light:'Light',Medium:'Medium',SemiBold:'Semi Bold',Black:'Black'};
 export function fontLabel(family:string){const m=/^(.+?)-(Thin|ExtraLight|Light|Medium|SemiBold|Black)$/.exec(family);if(m&&FONT_LABELS[m[1]])return FONT_LABELS[m[1]]+' '+WEIGHT_LABELS[m[2]];return FONT_LABELS[family]||family}
+// 글꼴 목록 순서: 한글 이름으로 보이는 폰트 -> 영문 이름으로 보이는 폰트 -> 기본 글꼴(sans-serif/serif) -> 목록에 없는 현재 글꼴(예전 프로젝트의 맑은 고딕 등).
+// 같은 폰트 안에서는 굵기 순(Thin < Light < 기본 < Medium < SemiBold < Black), 나머지는 이름 순.
+const WEIGHT_RANK:Record<string,number>={Thin:0,ExtraLight:1,Light:2,Medium:4,SemiBold:5,Black:6};
+export function fontOptions(fonts:string[],current:string){
+  const generic=['sans-serif','serif'],known=new Set([...fonts,...generic]);
+  const parts=(f:string)=>{const m=/^(.+?)-(Thin|ExtraLight|Light|Medium|SemiBold|Black)$/.exec(f);return m&&FONT_LABELS[m[1]]?[FONT_LABELS[m[1]],WEIGHT_RANK[m[2]]] as [string,number]:[fontLabel(f),3] as [string,number]};
+  const isKo=(f:string)=>/[가-힣]/.test(fontLabel(f));
+  const group=(f:string)=>generic.includes(f)?2:isKo(f)?0:1;
+  const list=[...new Set(fonts)].sort((a,b)=>{const ga=group(a),gb=group(b);if(ga!==gb)return ga-gb;const [la,ra]=parts(a),[lb,rb]=parts(b);return la.localeCompare(lb,'ko')||ra-rb});
+  const rest=known.has(current)?[]:[current];
+  return [...list.filter(f=>group(f)<2),...generic,...rest]
+}
