@@ -1,6 +1,6 @@
 # 정책서
 
-`cg-streamer`(송출 엔진, `src/cg-streamer`), 송출 화면 런타임(`bin/web/cg-runtime.js`), 에디터(`src/cg-editor`)가 **현재 코드에서 실제로 하는 동작**을 정리한 문서이다(2026-10-05 기준). 구현되지 않은 계획은 적지 않고, 알려진 한계는 맨 끝에 모았다. 값의 출처는 `main.cpp`(EncodeLoop·지터 버퍼), `hdmirx_source.cpp`, `video_source.cpp`, `audio_mixer.cpp`, `ts_muxer.cpp`, `mpp_encoder.cpp`, `log_writer.cpp`, `cg-runtime.js`, `src/cg-editor/app/*`, `src/cg-editor/scripts/files-server.mjs` 이다.
+`cg-streamer`(송출 엔진, `src/cg-streamer`)와 송출 화면 런타임(`bin/web/cg-runtime.js`)이 **현재 코드에서 실제로 하는 동작**을 정리한 문서이다(2026-10-05 기준). 구현되지 않은 계획은 적지 않고, 알려진 한계는 맨 끝에 모았다. 값의 출처는 `main.cpp`(EncodeLoop·지터 버퍼), `hdmirx_source.cpp`, `video_source.cpp`, `audio_mixer.cpp`, `ts_muxer.cpp`, `mpp_encoder.cpp`, `log_writer.cpp`, `cg-runtime.js` 이다.
 
 ## 1. 시계
 
@@ -80,30 +80,19 @@
 
 | 항목 | 정책 |
 |---|---|
-| 쓰는 글꼴 | `bin/fonts` 의 파일만 쓴다(.ttf .otf .woff .woff2). 파일 이름이 글꼴 이름이다. `-Bold`/`-Italic`/`-BoldItalic` 접미사는 같은 글꼴의 굵게/기울임으로 묶고, Light/Medium/Black 은 `NotoSansKR-Light` 처럼 별개 글꼴로 등록한다(`SemiBold`/`ExtraBold` 이름은 끝이 `Bold` 라 잘못 묶이므로 쓰지 않는다). `fonts.css` 는 파일 서버가 폴더를 읽어 자동으로 만든다. |
+| 쓰는 글꼴 | `bin/fonts` 의 파일만 쓴다(.ttf .otf .woff .woff2). 파일 이름이 글꼴 이름이다. `-Bold`/`-Italic`/`-BoldItalic` 접미사는 같은 글꼴의 굵게/기울임으로 묶고, Light/Medium/Black 은 `NotoSansKR-Light` 처럼 별개 글꼴로 등록한다(`SemiBold`/`ExtraBold` 이름은 끝이 `Bold` 라 잘못 묶이므로 쓰지 않는다). `bin/fonts/fonts.css` 는 폴더를 읽어 자동으로 만든다(송출 런타임이 이 파일로 등록). |
 | 포함 폰트 | 모두 SIL OFL 1.1(라이선스 전문은 `bin/fonts/licenses`). 고딕: NanumGothic, **NotoSansKR**(Light/Regular/Medium/Bold/Black), **Pretendard**(Light/Regular/Medium/Bold/Black), **SpoqaHanSansNeo**(Light/Regular/Medium/Bold, 한자 제외 서브셋), GothicA1, IBMPlexSansKR, GowunDodum. 명조: NanumMyeongjo, GowunBatang. 제목·장식: BlackHanSans, DoHyeon, Jua, Gugi, YeonSung. 손글씨: NanumPenScript, Gaegu, PoorStory, HiMelody. |
-| 윈도우 전용 폰트 | 맑은 고딕·Arial·돋움·바탕·궁서·Georgia·Times New Roman 등은 단말(Debian)에 없고 배포도 못 하므로 글꼴 목록에서 뺀다. 기본 글꼴은 `NotoSansKR`. |
-| 옛 글꼴 이름 치환 | 프로젝트를 읽을 때(에디터 `normalizeProject`, 송출 런타임 `fixItem`) 아래 규칙으로 바꾼다(글자 일부 서식 `runs` 포함, 에디터에서 저장하면 그대로 반영). 맑은 고딕·Malgun Gothic·Arial·Helvetica → NotoSansKR, Arial Black → NotoSansKR-Black, 돋움·Dotum → NanumGothic, 바탕·Batang·궁서·Gungsuh·Georgia·Times New Roman → NanumMyeongjo. 두 곳의 표(`LEGACY_FONTS`)는 같게 유지한다. |
-| 목록 표시 | 저장되는 값은 파일 이름 기반 그대로이고 목록에는 보기 좋은 이름을 쓴다. 한글 이름이 정식인 폰트는 한글(나눔고딕, 고운돋움, 주아 …), 영문 이름이 정식인 폰트는 영어(Noto Sans KR, Pretendard, Spoqa Han Sans Neo …). 순서는 한글 이름 → 영문 이름 → 기본 글꼴(sans-serif/serif) → 목록에 없는 현재 글꼴이고, 같은 폰트 안에서는 굵기 순(Thin < Light < 기본 < Medium < Black). |
+| 윈도우 전용 폰트 | 맑은 고딕·Arial·돋움·바탕·궁서·Georgia·Times New Roman 등은 단말(Debian)에 없고 배포도 못 하므로 쓰지 않는다. 송출 런타임의 기본 글꼴은 `NotoSansKR`. |
+| 옛 글꼴 이름 치환 | 송출 런타임이 프로젝트를 읽을 때(`fixItem`) 아래 규칙으로 바꾼다(글자 일부 서식 `runs` 포함). 맑은 고딕·Malgun Gothic·Arial·Helvetica → NotoSansKR, Arial Black → NotoSansKR-Black, 돋움·Dotum → NanumGothic, 바탕·Batang·궁서·Gungsuh·Georgia·Times New Roman → NanumMyeongjo. |
 
 ## 9. 프로젝트 파일(`bin/project/*.json`)
 
 | 항목 | 정책 |
 |---|---|
-| 저장 | 에디터가 파일 서버(`:8081`)를 통해 `bin/project/<이름>.json` 으로 저장한다. 일반 저장은 처음 연 파일에 덮어쓰고, "다른 이름으로 저장"만 새 이름으로 정한다. 이름의 공백·특수문자(`\ / : * ? " < > |` 와 제어문자)는 `_` 로 바꾸고 프로젝트 안의 `name` 도 파일 이름과 같게 맞춘다. |
-| 이름 변경 | 프로젝트 열기 창의 연필 버튼(`POST /projects/<이름>/rename`, 본문 `{to}`). 파일 이름과 프로젝트 안의 `name` 을 함께 바꾸고 임시 파일 후 교체한다. 같은 이름이 있으면 409, 없으면 404, 빈 이름은 400. 경로 문자는 `_` 로 정리되어 프로젝트 폴더 밖에는 못 만든다. 바꾼 프로젝트가 마지막 송출 프로젝트(`bin/.run/last-project`)이면 그 기록도 새 이름으로 바꾼다. 열어 둔 프로젝트도 바꿀 수 있고 화면의 이름과 저장 대상이 따라간다. |
 | 송출 프로젝트 선택 | `start.sh` 는 `CG_PROJECT` 환경변수, 없으면 `.run/last-project`(마지막으로 적용한 프로젝트), 둘 다 없으면 빈 프로젝트로 시작한다. |
 | 예제 | `자막예제-*`(crawl-right/top/2line, roll-up/down, lowerthird, headline-pages, fold-center/blind/3lines)는 HDMI 영상 개체 + 투명 배경 구성이다. 크롤 박스 폭은 글자 폭(`NotoSansKR-Bold`)에 맞춰 정하고 한 번 흐르는 시간은 (화면 폭 + 박스 폭) / 속도이다. 상하로 접히는 형태는 `scale` 효과의 `effectPreset=5`(세로만 줄임)로 만든다. |
 
-## 10. 에디터 동작
-
-| 항목 | 정책 |
-|---|---|
-| 문자 개체 크기 조절 | 가로·세로로 늘려도 **글자 크기(`size`)는 바꾸지 않고** 박스(`w`, `h`)만 바꾼다. 문자·시계·타이머가 대상이고 사각형·원 등은 기존처럼 크기에 맞춰 `size` 도 바뀐다. 드래그하는 동안은 글자가 늘어난 모양으로 보이고 놓으면 원래 글자 크기로 돌아온다. |
-| Style Catalog > Symbol | 특수문자를 누르면 선택한 문자 개체(text 만, 파일 연결·시계·타이머 제외)의 "자막 내용" 칸 커서 위치에 넣는다. 드래그로 선택한 글자가 있으면 그 부분을 대체하고, 칸을 누른 적이 없으면 글 끝에 넣는다. 넣은 뒤 커서를 글자 뒤로 옮기고 칸에 포커스를 돌려준다. 글자가 바뀌므로 부분 서식(`runs`)은 초기화된다. 컬러 이모지는 쓰지 않는다. |
-| Attributes 폭 | Name/자막 내용 칸은 194px 고정(`.textproperties`). |
-
-## 11. 인코더와 송출
+## 10. 인코더와 송출
 
 | 항목 | 정책 |
 |---|---|
@@ -113,7 +102,7 @@
 | 출력 대상 | `output=1` 로컬 HDMI 만(전체화면, 인코딩 없음) / `2` UDP 만(기본) / `3` HDMI + UDP(인코딩 결과를 미리보기 창에도 표시). `udp_ip`·`udp_port` 는 `cgsetup.cfg`, 환경변수 `CG_UDP` 가 임시로 덮어쓴다. |
 | 인코더가 늦을 때 | 틱을 건너뛰고(`miss`) 프레임이 아직 없으면 그 틱은 출력하지 않는다. |
 
-## 12. 로그
+## 11. 로그
 
 | 항목 | 정책 |
 |---|---|
@@ -121,7 +110,7 @@
 | 1초 통계 | `[estat]` 인코딩 루프(`enc`, `paint`, `gap_max`, `late25`, `big100`, `op_avg/op_max`(OnPaint 소요), `out`, `rga`, `video`, `uiq`, `under`, `drop`, `miss`, `accel_fail`), `[pstat]` 미리보기 창(`drawn`, `skipped_x`). 접두어는 7자로 폭을 맞춘다. |
 | 입력 timestamp | `[hdmirx-ts]` 영상·음성 timestamp 가 지금보다 얼마나 과거인지(1초). |
 
-## 13. 알려진 한계
+## 12. 알려진 한계
 
 - **밀린 틱을 따라잡지 않는다.** 만료 횟수가 1보다 커도 한 번만 처리한다.
 - **muxer 는 PTS 를 보정하지 않는다.** 되감김·중복 방지는 HDMI 영상 입력 쪽(`직전 + 1`)에만 있고 음성과 틱 시각 PTS 에는 없다. PTS 가 시스템 가동 시간이라 TS 33비트(약 26.5시간)에서 되감기며, 수신 단말이 이를 받아들이는지는 확인하지 않았다.
@@ -130,6 +119,5 @@
 - **라이브 음성이 직접 송출되는 동안 믹서의 다른 소리(영상 파일 음성, 효과음)는 송출되지 않는다**(로컬 재생에는 들린다).
 - **입력과 틱의 시계 차이.** HDMI 입력 59.94 에 `fps=60` 이면 약 16초마다, `fps=59.94` 이면 입력 소스 오차(약 28ppm)만큼(약 10분에 한 번) 프레임이 반복되거나 건너뛴다. 입력 프레임 도착을 틱으로 쓰는 방식은 구현하지 않았다.
 - **CEF 는 못 그리면 `paint` 가 60 아래로 떨어지고** 그만큼 직전 그림이 반복된다(`under`). 렌더링이 무거운 내용(정적 텍스트가 많은 페이지 등)에서 일어나며 7절의 텍스트 캐시로 줄였지만 초당 0~1회의 놓침은 남는다.
-- **글자 폭 차이.** 단말에 없는 글꼴은 다른 글꼴로 대체되어 박스에 안 들어갈 수 있다. 8절의 글꼴만 쓰면 에디터와 단말이 같다.
-- **텍스트 박스 크기 조절 중 미리보기.** 드래그하는 동안 글자가 늘어난 모양으로 보인다(놓으면 글자 크기 그대로).
+- **글자 폭 차이.** 단말에 없는 글꼴은 다른 글꼴로 대체되어 박스에 안 들어갈 수 있다. 8절의 글꼴만 쓰면 PC 와 단말이 같다.
 - 인코더 비트레이트(8Mbps)는 상수이고 설정으로 바꿀 수 없다. 인코더가 못 따라갈 때를 위한 인코더 분할·재정렬은 이 저장소에 구현되어 있지 않다.
