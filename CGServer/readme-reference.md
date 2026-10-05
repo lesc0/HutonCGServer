@@ -1,8 +1,10 @@
-# 참고 프로그램 분석: FFmpeg(fps 필터/x11grab), Sunshine
+# 참고 프로그램 분석: FFmpeg(fps 필터/x11grab), Sunshine, 상용 CG 서버
 
 작성일: 2026-10-05
 목적: 틱/타임스탬프 정책(`readme-policy.md`)의 열린 항목 — 밀린 틱을 어떻게 채울지(P6), 늦을 때 격자를 어떻게 다룰지(P4) — 를 실제 프로그램에서 확인.
 방법: 각 저장소 `master` 브랜치 원문을 내려받아 직접 읽음(2026-10-05 시점). 읽은 범위는 각 절에 명시.
+
+추가 조사(2026-10-05): 7절은 상용 CG 제품의 **공식 매뉴얼과 릴리스 노트**를 조사한 내용이며, 소스 코드 분석이 아니다. 1~6절의 정책 번호와 "확정/현재 정책" 표현은 당시 분석 맥락을 기록한 것이다. **송출 정책은 현재 논의 중이며, 이 문서의 비교 결과를 정책 확정으로 해석하지 않는다.**
 
 ## 1. 요약
 
@@ -174,3 +176,83 @@ while (true) {
 - FFmpeg `fps` 필터는 입력 2프레임 버퍼 로직만 읽었고 EOF 처리 세부는 읽지 않음.
 - Sunshine: `kmsgrab.cpp` 의 캡처 루프도 같은 `handle_pacing` 을 쓰는 것을 grep 으로만 확인(전체 읽지 않음). 오디오 경로, 클라이언트 동기, `capture_frame_interval` 정의는 읽지 않음.
 - 세 프로그램 모두 **소스 코드만** 읽었고 실제 실행해서 틱 지터나 A/V 어긋남을 측정하지는 않았다.
+
+## 7. 상용 CG 서버의 렌더링·출력 방식
+
+조사일: 2026-10-05. 대상: Vizrt Viz Engine, Ross XPression, Chyron PRIME.
+목적: 상용 CG가 입력 도착과 출력 주기를 어떻게 다루는지 확인하고, cg-streamer의 송출 정책을 정할 근거를 모은다.
+
+### 7-1. 조사 결론과 확인 범위
+
+공식 문서에서 확인되는 방향은 **출력 영상의 주기에 맞춘 렌더링, 출력 준비 버퍼, 출력 클록에 대한 동기화**다. 특히 Viz Engine은 렌더링과 실제 송출 사이의 지연 및 선행 렌더링 버퍼를 명시한다.
+
+다만 이것을 **"상용 CG도 소프트웨어 fps 타이머로 인코더를 호출한다"**는 뜻으로 해석하면 안 된다. 영상 보드 클록, Genlock, PTP, 모니터 주사율 등 출력 구성에 따른 동기 기준이 있으며, 실제 대기 함수와 스레드 구현은 이번 자료에서 확인하지 못했다.
+
+| 제품·문서 범위 | 공식 문서에서 확인한 동작 | 확인하지 못한 부분 |
+|---|---|---|
+| Viz Engine 5.3 | 출력 포맷의 필드 주기에 맞춘 렌더링, 출력 동기 기준 선택, 출력 지연 및 링버퍼 | 내부 타이머/콜백 구현, 일반 출력의 과부하 복구 알고리즘 |
+| XPression 5.5 릴리스 기록(2014) | Virtual Output을 프로젝트 fps 또는 모니터 주사율에 맞춰 렌더링하는 옵션 | 현재 버전 전체 출력 경로와 인코더 구동 방식 |
+| PRIME 5.2 | 출력 채널 fps, 입력 Frame Synchronizer, SDI Genlock 기준, 압축 네트워크 출력 설정 | 네트워크 송신 페이싱, PTS/PCR 생성 알고리즘 |
+
+아래 각 절의 링크가 해당 사실의 근거다. 상용 제품의 소스를 읽거나 실제 장비에서 측정한 결과는 아니다.
+
+### 7-2. Vizrt Viz Engine — 출력 주기와 준비 버퍼
+
+**공식 문서에서 확인한 사실:**
+
+- 출력 포맷의 필드 주기에 맞춰 실시간 렌더링한다. 문서는 50Hz에서 20ms, 59.94Hz에서 약 16.67ms의 필드별 처리 시간을 설명한다. 인터레이스에서는 필드 주기와 완전한 프레임의 fps를 구분해야 한다. [Performance Considerations, 5.3](https://docs.vizrt.com/viz-engine-guide/5.3/Performance_Considerations.html)
+- 출력 동기 기준으로 영상 보드 내부 클록(Freerun), Blackburst, Tri-level, 영상 입력, PTP 등을 제공한다. 따라서 출력 주기가 있다는 사실과 소프트웨어 sleep 타이머를 사용한다는 주장은 별개다. [Video Output, 5.3](https://documentation.vizrt.com/viz-engine-guide/5.3/Video_Output.html)
+- `Output delay`는 렌더링을 시작할 수 있는 가장 이른 시점부터 실제 송출까지의 시간을 프레임 단위로 설정한다. 렌더링, GPU 데이터 전송, 필요한 보드 처리를 포함하며, 지연 여유를 늘리면 순간 부하에 따른 드롭을 줄일 수 있다.
+- 해당 output-delay 방식을 쓰지 않는 출력 클래스에는 `Videoout Ring Buffer`가 있다. **여러 그래픽 프레임을 미리 렌더링해 영상 하드웨어에 제공**하며, 버퍼를 늘리면 출력 지연도 늘어난다. [Video Board, 5.3](https://documentation.vizrt.com/viz-engine-guide/5.3/Video_Board.html)
+
+문서 내용을 개념적으로 정리하면 다음과 같다. 실제 스레드 구성이나 함수 호출 순서를 뜻하지는 않는다.
+
+```text
+출력 시각에 맞춘 렌더링 → 출력 지연/링버퍼 → 동기화된 영상 출력
+```
+
+**늦은 렌더링 처리에 관한 제한적인 근거:** `Incremental Video Wall` 애니메이션 카운터 모드에서는 렌더 단계 사이의 경과 시간으로 애니메이션을 진행하고, 실시간보다 느려지면 프레임을 건너뛰어 다른 엔진을 따라잡는다고 명시한다. 이는 **특정 비디오월 애니메이션 모드**의 설명이며, 모든 SDI·TS 출력에서 압축 패킷을 드롭한다는 의미는 아니다. [Render Options, 5.3](https://documentation.vizrt.com/viz-engine-guide/5.3/Render_Options.html)
+
+### 7-3. Ross XPression — 프로젝트 fps와 출력 장치 주기
+
+공식 **Version 5.5(2014-05-01)** 릴리스 노트에는 Virtual Output Framebuffer에 **프로젝트 fps 대신 모니터 주사율로 렌더링하는 옵션**을 추가했다고 기록돼 있다. 프로젝트 fps와 모니터 주사율이 같을 때 가상 출력이 더 부드러워진다고 설명한다. [XPression Software Releases — Version 5.5 / Engine](https://www.rossvideo.com/products/graphics-and-virtual/software-releases/)
+
+- 확인 가능: 시간 주기에 맞춘 렌더링이 실제 상용 CG 제품에 사용된 사례다.
+- 해석 한계: 오래된 Virtual Output 기능의 기록이다. 현재 XPression의 모든 출력, SDI 보드, 압축 인코더가 같은 방식으로 동작한다고 일반화하지 않는다.
+
+### 7-4. Chyron PRIME — 입력 동기화와 출력 채널 설정
+
+PRIME 5.2 공식 매뉴얼에서 확인한 내용:
+
+| 항목 | 동작 |
+|---|---|
+| `Video Standard` | 출력 채널의 해상도와 fps 설정 |
+| SDI `Genlock Source` | Genlock 입력, SDI 입력, 내부 기준 중 선택 |
+| 입력 `Frame Synchronizer` | 입력 영상을 Genlock에 동기화하며 1프레임 지연 추가 |
+| Network Stream | H.264/H.265 코덱, MPEG-TS 등의 컨테이너, GOP, 영상·음성 bitrate 설정 |
+
+근거: [PRIME 5.2 Playout Configuration User Guide, 인쇄 페이지 9–10 및 22–23](https://help.chyron.com/hc/en-us/article_attachments/39848854045076).
+
+**해석:** 입력을 출력의 기준 시각에 맞추는 기능과 출력 채널 자체의 fps를 구분한다. 그러나 이 설정만으로 입력 큐의 선택 규칙, 정지 화면 재인코딩 간격, UDP 페이싱 방식까지 알 수는 없다.
+
+### 7-5. 우리 서버와 가까운 압축 TS 출력 사례
+
+Viz Engine 5.3의 **Matrox Stream** 경로는 H.264 영상과 2채널 AAC 음성을 **MPEG-TS over RTP**로 출력한다. DSX.Core 또는 해당 기능을 갖춘 Matrox 구성이 필요하다.
+
+- 해당 문서는 입력과 출력 사이에 fps 변환이 없으므로 **입출력 fps가 같아야 한다**고 명시한다.
+- SDI·NDI·RTP 출력을 동시에 활성화할 수 있으며, bitrate 설정도 제공한다.
+- 해당 버전의 지원 표에서 **raw MPEG-TS over UDP는 입력만 지원**, 출력은 MPEG-TS over RTP다. 우리 서버의 raw UDP TS 출력과 동일한 전송 방식으로 취급하지 않는다.
+
+근거: [Matrox Stream, 5.3 — 지원 표 및 Output Mode](https://documentation.vizrt.com/viz-engine-guide/5.3/Matrox_Stream.html).
+
+이 페이지의 FFmpeg 명령은 외부 테스트 입력을 만드는 예제다. 이를 Viz Engine 내부의 인코더·송신 구현으로 해석하지 않는다. TS muxrate, null packet 삽입, PCR 생성, 패킷 간격 제어의 내부 알고리즘은 이번 조사에서 확인하지 못했다.
+
+### 7-6. cg-streamer 정책에 참고할 점 — 제안이며 미확정
+
+1. **출력의 시간 기준을 먼저 정한다.** 상용 사례는 출력 클록과 영상 포맷을 기준으로 렌더링을 맞추는 설계의 근거가 된다. 우리 서버에서 이를 소프트웨어 스케줄러로 구현할지, 다른 클록에 동기화할지는 별도 결정이다.
+2. **렌더링 완료와 실제 송출 사이에 준비 시간을 둔다.** Viz Engine의 출력 지연·링버퍼처럼 처리 시간 변동을 흡수하는 버퍼와 목표 지연을 명시하는 방안을 검토한다. CEF 입력 지터 버퍼와 출력 준비 버퍼는 위치와 역할이 다르다.
+3. **프레임 주기와 압축 데이터 송신 속도를 구분한다.** 출력 fps, 인코더 bitrate, TS 전체 전송률, 네트워크 페이싱을 각각 설계한다. 상용 제품의 bitrate 설정 존재만으로 구체적인 패킷 페이싱 알고리즘이 검증되지는 않는다.
+4. **큰 지연 뒤의 복구는 별도 정책이다.** 무한 따라잡기, 출력 슬롯 건너뛰기, 직전 화면 반복 중 어느 규칙을 적용할지는 이 자료만으로 확정할 수 없다. Viz 비디오월의 건너뛰기 사례를 일반 TS 송출에 그대로 적용하지 않는다.
+5. **입력 도착 구동 여부는 계속 논의한다.** "CEF 그림이 들어올 때마다 전부 인코딩하고 bitrate만 맞춰 송신"하는 방식을 위 제품들이 사용한다는 근거는 찾지 못했다. 이는 그 방식이 불가능하다는 증거는 아니며, 이번 조사로 뒷받침되지 않았다는 뜻이다.
+
+이번 조사로 근거가 확보된 것은 **출력 주기에 맞춘 렌더링 + 준비 버퍼 + 동기화된 출력**이다. cg-streamer의 구체적인 fps 틱, 입력 선택, PTS, 과부하 처리, TS 페이싱 정책은 아직 확정하지 않는다.
