@@ -41,6 +41,8 @@ export const loadProjectFile = async (name: string): Promise<unknown> => call('/
 export const saveProjectFile = async (name: string, project: Project): Promise<{name: string; updated: number; extractedMedia: number; project: Project}> =>
   call('/projects/' + encodeURIComponent(name), {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(project)});
 export const deleteProjectFile = async (name: string): Promise<{ok: boolean}> => call('/projects/' + encodeURIComponent(name), {method: 'DELETE'});
+export const renameProjectFile = async (name: string, to: string): Promise<{name: string; updated?: number; unchanged?: boolean}> =>
+  call('/projects/' + encodeURIComponent(name) + '/rename', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({to})});
 
 // 송출 제어: 파일 서버가 cg-streamer 의 HTTP 컨트롤 포트(기본 127.0.0.1:5555)로 중계한다(/ctl/*).
 export type CtlStatus = {ready: boolean; project?: string; file?: string; page?: number; pages?: number; playing?: boolean; visible?: boolean; time?: number; cycle?: number};

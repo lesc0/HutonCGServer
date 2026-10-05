@@ -219,6 +219,33 @@ const server = http.createServer(async (req, res) => {
         }));
         return json(res, 200, {dir: PROJECT_DIR, projects: out.sort((a, b) => b.updated - a.updated)});
       }
+      if (seg.length === 3 && seg[2] === 'rename' && req.method === 'POST') {   // 이름 변경: 파일 이름과 프로젝트 안의 name 을 같이 바꾼다
+        const fromFile = projectFile(seg[1]);
+        let body;
+        try { body = JSON.parse((await readBody(req, 4096)).toString('utf8')); } catch { return fail(res, 400, '요청을 읽지 못했습니다.'); }
+        // 저장(page.tsx saveServer)과 같은 규칙: 이름의 공백·특수문자는 '_' 로
+        const to = String(body && body.to || '').trim().replace(/[\\/:*?"<>|\x00-\x1f\s]+/g, '_');
+        const toFile = projectFile(to);
+        if (!fromFile || !toFile) return fail(res, 400, '프로젝트 이름이 올바르지 않습니다.');
+        const fromPath = path.join(PROJECT_DIR, fromFile), toPath = path.join(PROJECT_DIR, toFile);
+        if (fromFile === toFile) return json(res, 200, {name: toFile.replace(/\.json$/i, ''), unchanged: true});
+        if (await fsp.stat(toPath).then(() => true, () => false)) return fail(res, 409, '같은 이름의 프로젝트가 이미 있습니다: ' + toFile.replace(/\.json$/i, ''));
+        const text = await fsp.readFile(fromPath, 'utf8').catch(() => null);
+        if (text === null) return fail(res, 404, '프로젝트가 없습니다: ' + seg[1]);
+        const newName = toFile.replace(/\.json$/i, '');
+        let out = text;
+        try { const p = JSON.parse(text); if (p && typeof p === 'object') { p.name = newName; out = JSON.stringify(p); } } catch { /* JSON 이 아니면 내용은 그대로 두고 파일 이름만 바꾼다 */ }
+        const tmp = toPath + '.tmp-' + process.pid;
+        await fsp.writeFile(tmp, out);
+        await fsp.rename(tmp, toPath);
+        await fsp.unlink(fromPath);
+        // 마지막으로 송출한 프로젝트(bin/.run/last-project)가 이 프로젝트면 새 이름으로 맞춘다(start.sh 가 다음 시작 때 이 이름을 쓴다)
+        const lastFile = path.join(PROJECT_DIR, '..', '.run', 'last-project');
+        const last = await fsp.readFile(lastFile, 'utf8').catch(() => null);
+        if (last !== null && last.replace(/[\r\n]+$/, '') === fromFile.replace(/\.json$/i, '')) await fsp.writeFile(lastFile, newName).catch(() => {});
+        const st = await fsp.stat(toPath);
+        return json(res, 200, {name: newName, updated: st.mtimeMs});
+      }
       if (seg.length === 2) {
         const file = projectFile(seg[1]);
         if (!file) return fail(res, 400, '프로젝트 이름이 올바르지 않습니다.');
