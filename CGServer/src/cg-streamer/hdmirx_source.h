@@ -34,6 +34,7 @@ class HdmiRxSource {
   std::thread th_, ath_;
   std::atomic<bool> running_{false}, stop_{false}, signal_{false};
   std::mutex mu_;
-  int cur_ = -1;              // 현재 보관 중인 버퍼 index (-1 = 없음)
+  int64_t last_pts_us_ = 0;   // 직전 프레임 PTS(µs). 재연결해도 유지해 단조 증가를 보장
+  int cur_ = -1;             // 현재 보관 중인 버퍼 index (-1 = 없음)
   VideoFrameRef cur_ref_;
 };

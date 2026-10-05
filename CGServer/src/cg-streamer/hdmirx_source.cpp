@@ -300,12 +300,18 @@ bool HdmiRxSource::Session(const std::string& dev) {
         b.m.planes = pl;
         b.length = VIDEO_MAX_PLANES;
         if (Xioctl(fd, VIDIOC_DQBUF, &b) < 0) continue;
-        // 입력 timestamp(= PTS 원천): V4L2 버퍼 timestamp 가 MONOTONIC 이면 그대로(muxer/ALSA 와 같은 CLOCK_MONOTONIC), 아니면 지금 시각
+        // 드라이버가 스트림을 멈출 때(신호 변경 등) 돌려주는 버퍼는 ERROR 플래그가 붙어 있다. 내용이 유효하지 않으므로 바로 다시 큐에 넣고 버린다.
+        if (b.flags & V4L2_BUF_FLAG_ERROR) { qbuf((int)b.index); continue; }
+        // 입력 timestamp(= PTS 원천): V4L2 버퍼 timestamp 를 µs 로 (tv_sec*1000000 + tv_usec). 직전 값 이하이면 직전 + 1 (단조 증가).
+        // timestamp 가 MONOTONIC 이 아니면(음성/muxer 의 CLOCK_MONOTONIC 과 시계가 다름) 도착 시각으로 대체한다.
         const int64_t now_ns = (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
-        int64_t ts_ns = now_ns;
+        int64_t pts_us = now_ns / 1000;
         if ((b.flags & V4L2_BUF_FLAG_TIMESTAMP_MASK) == V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC && (b.timestamp.tv_sec || b.timestamp.tv_usec))
-          ts_ns = (int64_t)b.timestamp.tv_sec * 1000000000LL + (int64_t)b.timestamp.tv_usec * 1000LL;
+          pts_us = (int64_t)b.timestamp.tv_sec * 1000000LL + b.timestamp.tv_usec;
         else if (!warned_ts) { printf("[hdmirx] V4L2 timestamp 가 MONOTONIC 이 아님(flags=0x%x) - 도착 시각으로 대체\n", b.flags); warned_ts = true; }
+        if (pts_us <= last_pts_us_) pts_us = last_pts_us_ + 1;
+        last_pts_us_ = pts_us;
+        const int64_t ts_ns = pts_us * 1000;
         {   // 1초 단위 진단: timestamp 가 지금보다 얼마나 과거인지, 프레임 간격
           const double age = (now_ns - ts_ns) / 1e6;
           const double gap = last_ts ? (ts_ns - last_ts) / 1e6 : 0;
