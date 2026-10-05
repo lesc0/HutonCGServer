@@ -184,3 +184,12 @@ input:disabled,textarea:disabled{background:#0a0d15;color:#55617c}
 
 /* 컨텍스트 메뉴 항목: 아이콘 + 글자 */
 .contextmenu button{display:flex;align-items:center;gap:8px}.contextmenu button svg{flex:none;opacity:.85}
+
+/* Style Catalog > Symbol 탭: 특수문자 선택 */
+.symbol-stylegrid{display:block}.symbol-picker{display:flex;flex-direction:column;gap:8px}
+.symbol-hint{font-size:12px;color:var(--muted)}
+.symbol-group-name{font-size:12px;color:var(--muted);margin-bottom:3px}
+.symbol-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(34px,1fr));gap:3px}
+.symbol-grid button{display:flex;align-items:center;justify-content:center;height:32px;padding:0;font-size:18px;line-height:1;background:var(--btn);border:1px solid var(--line);border-radius:5px;color:var(--text)}
+.symbol-grid button:hover:not(:disabled){background:var(--accent);color:#fff;border-color:var(--accent2)}
+.symbol-grid button:disabled{opacity:.4;cursor:default}
