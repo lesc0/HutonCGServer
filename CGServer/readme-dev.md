@@ -105,6 +105,9 @@ cd ../../bin && DISPLAY=:0 ./start.sh      # cg-editor(8080) + cg-streamer + 키
 ## 성능 참고 (로그 `[estat]` 읽는 법)
 - 로그는 `bin/log/cg-streamer-YYYY-MM-DD.log`(줄마다 시간 표시, 일별 파일, 30일 보관). 1초마다 `[estat]`(인코딩 루프: `enc`, `paint`, `drop`, `miss` …)와 `[pstat]`(미리보기 창: `drawn`, `skipped`)가 찍힌다. 접두어는 7자로 폭을 맞춰 값이 같은 열에서 시작한다. (이전 이름: `[stat]` → `[estat]`, `[preview-stat]` → `[pstat]`)
 - `miss` = timerfd 만료 횟수가 1 보다 커서 밀린 틱 수 누적(따라잡기는 아직 안 함).
+- `op_avg`/`op_max` = `OnPaint` 한 번에 걸린 시간(ms, 1초 단위). 16.7ms 에 가까워지면 CEF 가 다음 프레임을 놓친다. 정상은 평균 3ms·최대 8ms 안팎.
+- `paint` 가 60 보다 낮으면 CEF 가 그 속도로 못 그리는 것(`windowless_frame_rate` 는 상한). 이때 송출은 60 틱이라 직전 그림이 반복되어 `under` 가 늘고 화면이 끊겨 보인다. 렌더러 쪽 원인을 보려면 `./cg-streamer --run ... --jsprof` 로 `[jstat]`(rAF 호출 수·`late`, `frame()`/`render()` 소요, `gc`)를 켠다(평소엔 꺼짐, 켜면 로그에 1초마다 한 줄).
+- 자막 텍스트가 많은 프로젝트에서 `paint` 가 떨어졌던 원인과 해결(정적 텍스트 캐시, 캐시 미리 생성)은 readme-history.md 2026-10-05 7) 참고.
 - `drop` = UI 지터 버퍼(CEF OnPaint 그림 큐)에서 버려진 그림 수 누적. 인코더/패킷 드롭이 아님. 큐 수위(`uiq`)가 목표(`kUiPrime=5`)를 1초 넘게 넘으면 1장씩(main.cpp:593), 8장(`kUiMax`)을 넘으면 즉시(main.cpp:291) 버림.
 - 정상값(Debian 11 기록): `enc≈60.0fps`, `paint≈59.9/s`, `uiq 0~3`, `drop 0~1`(5.5분). **Debian 12 에서 4K HDMI 입력(3840x2160@59.94)을 합성할 때** `enc 55~60`, `paint 60~66`, `uiq 7~8`, `drop 초당 약 1.4장` 으로 달라짐(원인 조사 중: 인코딩 루프가 60Hz 를 못 지켜 큐가 참).
 - GPU 모드: `--gpu --cef:use-angle=gles-egl` 로 실행 중(gpu-process 확인, paint=60/s). 로그에 GPU 이름은 찍히지 않음.
