@@ -103,19 +103,11 @@ bool TsMuxer::Write(const uint8_t* d, size_t len, int64_t src_ts_ns) {
   pkt->duration = av_rescale_q(1, AVRational{1, fps_}, st_->time_base);
   if (IsIdr(d, len)) pkt->flags |= AV_PKT_FLAG_KEY;
 
-  using sclk = std::chrono::steady_clock;
-  if (src_ts_ns <= 0)   // 입력 timestamp 가 없으면 지금 시각 (프레임 번호로 만들지 않는다)
-    src_ts_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(sclk::now().time_since_epoch()).count();
+  if (src_ts_ns <= 0)   // 입력 timestamp 가 없으면 지금 시각
+    src_ts_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  // PTS = timestamp(ns)를 90kHz 로 환산만 한다 (기준점 빼기·보정 없음)
+  pkt->pts = pkt->dts = av_rescale_q(src_ts_ns, AVRational{1, 1000000000}, st_->time_base);
   std::lock_guard<std::mutex> lk(mu_);
-  if (!base_set_) {   // 시간 0 = 첫 영상 timestamp (음성 PTS 도 이 base_ 기준)
-    base_ = sclk::time_point(std::chrono::duration_cast<sclk::duration>(std::chrono::nanoseconds(src_ts_ns)));
-    base_set_ = true;
-  }
-  const int64_t base_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(base_.time_since_epoch()).count();
-  int64_t pts = av_rescale_q(src_ts_ns - base_ns, AVRational{1, 1000000000}, st_->time_base);
-  if (last_vpts_ != INT64_MIN && pts <= last_vpts_) pts = last_vpts_ + 1;   // DTS 단조 증가 유지
-  last_vpts_ = pts;
-  pkt->pts = pkt->dts = pts;
   int r = av_write_frame(fc_, pkt);
   av_packet_free(&pkt);
   if (r < 0) {
@@ -127,12 +119,11 @@ bool TsMuxer::Write(const uint8_t* d, size_t len, int64_t src_ts_ns) {
 
 bool TsMuxer::WriteAudio(const float* pcm, std::chrono::steady_clock::time_point block_start) {
   std::lock_guard<std::mutex> lk(mu_);
-  if (!fc_ || !header_ || !aenc_ || !base_set_) return false;   // 영상이 시작되기 전 음성은 버림
+  if (!fc_ || !header_ || !aenc_) return false;
 
-  int64_t pts = std::llround(std::chrono::duration<double>(block_start - base_).count() * kAudioRate);
-  if (last_apts_ != INT64_MIN && std::llabs(pts - (last_apts_ + kAudioFrame)) < 480) pts = last_apts_ + kAudioFrame;   // 지터 흡수
-  if (pts < 0) return false;
-  last_apts_ = pts;
+  // PTS = 블록 첫 샘플 시각(ns)을 환산만 한다 (영상과 같은 CLOCK_MONOTONIC, 기준점 빼기·보정 없음). 인코더 time_base(1/48000)로 넘기면 mux 에서 90kHz 로 바뀜
+  const int64_t pts = av_rescale_q(std::chrono::duration_cast<std::chrono::nanoseconds>(block_start.time_since_epoch()).count(),
+                                   AVRational{1, 1000000000}, aenc_->time_base);
 
   AVFrame* f = av_frame_alloc();
   f->nb_samples = kAudioFrame;
