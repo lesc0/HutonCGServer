@@ -92,7 +92,12 @@ lagged_frames += count - 1;  vframe_info.count = count;
 - PTS 가 시스템 가동 시간이라 TS 33비트(약 26.5시간)에서 되감김. muxer 가 처리하지만 수신 단말이 받아들이는지는 확인한 적 없음(정책서 미결정 11).
 - 밀린 틱 따라잡기(정책 4) 미구현(3) 참고).
 
-### 6) 개발 보조
+### 6) 로그 접두어 변경: `[stat]` → `[estat]`, `[preview-stat]` → `[pstat]`
+
+- 두 접두어 폭이 달라(`[stat]` 6자 / `[preview-stat]` 14자) 값 열이 어긋났다. 처음엔 `[stat]` 뒤에 공백을 채워 폭을 맞췄다가, 사용자 요청으로 짧은 이름 `[estat]`(encode) / `[pstat]`(preview) 7자로 통일(공백 패딩 제거). `--no-encode` 의 `[stat] no-encode` 도 `[estat]`.
+- 위 2)~5) 항목의 `[stat]` 는 당시 이름 그대로 두었다. `grep` 은 `\[estat\]`, `\[pstat\]` 로. 지금은 `[hdmirx-ts]` 만 폭이 다르다(미정렬).
+
+### 7) 개발 보조
 
 - 단말 SSH 공개키 등록: `bin/setup-ssh-key.ps1`(Windows PowerShell, 키 생성/등록/접속 확인). 한글이 깨지지 않도록 UTF-8 **BOM** 으로 저장. `bin/*` 가 gitignore 라 저장소에는 올라가지 않는다(올리려면 `.gitignore` 에 예외 추가).
 - 임시로 PC 로 UDP 송출: `CG_UDP=<ip>:1234 bin/start.sh`. PC 에서 `UdpClient(1234)` 로 받아 TS 동기 바이트(0x47)와 `ffprobe -show_entries packet=pts` 로 PTS 를 확인했다.

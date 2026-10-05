@@ -148,7 +148,7 @@ static std::string g_state = "{\"ready\":false}";
 static std::atomic<bool> g_ready{false};   // player.html 로딩 완료 신호
 static std::atomic<bool> g_quit{false};
 static std::atomic<uint64_t> g_paints{0};
-// OnPaint 도착 간격 진단(1초 단위로 [stat] 에 출력 후 초기화): 가장 큰 간격(ms)과 25ms(60fps 의 1.5프레임) 넘게 늦은 횟수
+// OnPaint 도착 간격 진단(1초 단위로 [estat] 에 출력 후 초기화): 가장 큰 간격(ms)과 25ms(60fps 의 1.5프레임) 넘게 늦은 횟수
 static std::atomic<uint32_t> g_gap_max_us{0}, g_gap_late{0}, g_gap_big{0};
 static pid_t g_child = 0;
 static CefRefPtr<CefMessageRouterBrowserSide> g_router;
@@ -665,7 +665,7 @@ static void EncodeLoop(CefRefPtr<Client> client) {
         ql = g_store.q.size();
         dropped = g_store.dropped;
       }
-      printf("[stat]        enc=%.1ffps paint=%llu/s gap_max=%.0fms late25=%u big100=%u out=%.2fMbps rga=%.1fms video=%s uiq=%zu under=%llu drop=%llu miss=%llu accel_fail=%llu\n",
+      printf("[estat] enc=%.1ffps paint=%llu/s gap_max=%.0fms late25=%u big100=%u out=%.2fMbps rga=%.1fms video=%s uiq=%zu under=%llu drop=%llu miss=%llu accel_fail=%llu\n",
              frames / sec, (unsigned long long)(p - last_paints), g_gap_max_us.exchange(0) / 1000.0, g_gap_late.exchange(0),
              g_gap_big.exchange(0), bytes * 8.0 / sec / 1e6, g_encoder.TakeComposeMs(),
              g_hdmi.Active() ? (g_hdmi.HasSignal() ? "hdmirx" : "hdmirx(no-signal)")
@@ -897,7 +897,7 @@ static bool XOutputGeom(Display* dpy, Window root, const std::string& name, int&
       }
     }
     if (clk::now() - stat_t0 >= std::chrono::seconds(1)) {
-      printf("[preview-stat] drawn=%llu/s skipped(X못따라옴)=%llu/s draw_gap_max=%.0fms\n",
+      printf("[pstat] drawn=%llu/s skipped(X못따라옴)=%llu/s draw_gap_max=%.0fms\n",
              (unsigned long long)drawn, (unsigned long long)skipped_pending, draw_gap_max_ms);
       drawn = 0; skipped_pending = 0; draw_gap_max_ms = 0; stat_t0 = clk::now();
     }
@@ -970,7 +970,7 @@ static int DrmPreviewRun() {
       return 2;
     }
     if (clk::now() - stat_t0 >= std::chrono::seconds(1)) {
-      printf("[preview-stat] drm flip=%llu/s\n", (unsigned long long)drawn);
+      printf("[pstat] drm flip=%llu/s\n", (unsigned long long)drawn);
       drawn = 0;
       stat_t0 = clk::now();
     }
@@ -1479,7 +1479,7 @@ int main(int argc, char* argv[]) {
         if (!g_encode && !g_view && now - last_stat >= std::chrono::seconds(1)) {
           last_stat = now;   // --no-encode: EncodeLoop 대신 paint 통계
           uint64_t p = g_paints.load();
-          printf("[stat]        no-encode paint=%llu/s\n", (unsigned long long)(p - last_paints));
+          printf("[estat] no-encode paint=%llu/s\n", (unsigned long long)(p - last_paints));
           last_paints = p;
         }
         if (seconds > 0 && std::chrono::steady_clock::now() - t0 > std::chrono::seconds(seconds))
