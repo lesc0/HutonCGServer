@@ -58,7 +58,8 @@ void HdmiRxSource::AudioRun() {
     int (*st_malloc)(void**);
     void (*st_free)(void*);
     int (*status)(void*, void*);
-    void (*st_get_tstamp)(const void*, timeval*);
+    void (*st_get_htstamp)(const void*, timespec*);
+    unsigned long (*st_get_avail)(const void*);
   } a{};
   void* lib = dlopen("libasound.so.2", RTLD_NOW);
   if (lib) {
@@ -77,10 +78,11 @@ void HdmiRxSource::AudioRun() {
     a.st_malloc = (decltype(a.st_malloc))dlsym(lib, "snd_pcm_status_malloc");
     a.st_free = (decltype(a.st_free))dlsym(lib, "snd_pcm_status_free");
     a.status = (decltype(a.status))dlsym(lib, "snd_pcm_status");
-    a.st_get_tstamp = (decltype(a.st_get_tstamp))dlsym(lib, "snd_pcm_status_get_tstamp");
+    a.st_get_htstamp = (decltype(a.st_get_htstamp))dlsym(lib, "snd_pcm_status_get_htstamp");
+    a.st_get_avail = (decltype(a.st_get_avail))dlsym(lib, "snd_pcm_status_get_avail");
   }
   const bool have_ts_api = lib && a.sw_malloc && a.sw_free && a.sw_current && a.sw_set_tstamp_mode && a.sw_set_tstamp_type &&
-                           a.sw_params && a.st_malloc && a.st_free && a.status && a.st_get_tstamp;
+                           a.sw_params && a.st_malloc && a.st_free && a.status && a.st_get_htstamp && a.st_get_avail;
   void* st_h = nullptr;          // snd_pcm_status_t (타임스탬프 사용 중일 때만)
   double age_sum = 0, age_max = 0;   // 캡처 timestamp 가 지금보다 얼마나 과거인지(ms) 1초 단위 진단
   int age_n = 0;
@@ -118,7 +120,7 @@ void HdmiRxSource::AudioRun() {
           a.sw_free(sw);
         }
         if (ok && a.st_malloc(&st_h) != 0) st_h = nullptr;
-        printf("[hdmirx] 음성 timestamp: %s\n", st_h ? "ALSA status tstamp(monotonic)" : "설정 실패 - 지금 시각으로 대체");
+        printf("[hdmirx] 음성 timestamp: %s\n", st_h ? "ALSA htstamp(monotonic)" : "설정 실패 - 지금 시각으로 대체");
       }
       // 이 보드(rk_hdmirx)는 readi 의 자동 시작이 EIO 로 실패해서 명시적으로 start 해야 한다.
       if (a.start(pcm_h) < 0) {
@@ -139,16 +141,19 @@ void HdmiRxSource::AudioRun() {
       }
       continue;
     }
-    // 오디오 PTS: snd_pcm_status 의 tstamp 를 µs(tv_sec*1000000 + tv_usec)로 그대로 사용 (샘플 수 보정 없음).
+    // 이번 블록 첫 샘플의 캡처 시각 = (status 시각) - (방금 읽은 n + 아직 안 읽은 avail 샘플) / 48k
     int64_t ts_ns = 0;
     if (st_h && a.status(pcm_h, st_h) == 0) {
-      timeval tv{};
-      a.st_get_tstamp(st_h, &tv);
-      const int64_t pts_us = (int64_t)tv.tv_sec * 1000000LL + tv.tv_usec;
-      const int64_t age = now_ns() - pts_us * 1000;
-      if (pts_us > 0 && age > -50000000LL && age < 1000000000LL) {   // 지금 기준 -50ms~1s 안이면 사용, 아니면(시계가 다르거나 0) 지금 시각으로 대체
-        ts_ns = pts_us * 1000;
-        age_sum += age / 1e6; age_max = std::max(age_max, age / 1e6); age_n++;
+      timespec ht{};
+      a.st_get_htstamp(st_h, &ht);
+      if (ht.tv_sec || ht.tv_nsec) {
+        const int64_t end_ns = (int64_t)ht.tv_sec * 1000000000LL + ht.tv_nsec;
+        const int64_t cand = end_ns - (int64_t)(n + (long)a.st_get_avail(st_h)) * 1000000000LL / AudioMixer::kRate;
+        const int64_t age = now_ns() - cand;
+        if (age > -50000000LL && age < 1000000000LL) {   // 지금 기준 -50ms~1s 안이면 신뢰, 아니면 버림(지금 시각으로 대체)
+          ts_ns = cand;
+          age_sum += age / 1e6; age_max = std::max(age_max, age / 1e6); age_n++;
+        }
       }
     }
     if (age_n >= 47) {   // 약 1초
