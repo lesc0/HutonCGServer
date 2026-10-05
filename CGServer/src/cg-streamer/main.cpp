@@ -7,6 +7,7 @@
 //         EncodeLoop 틱(kFps)이 매번 SendExternalBeginFrame 으로 직접 그리기를 요청한다.
 //         기본 빌드(OFF)는 기존처럼 windowless_frame_rate 기반 CEF 자체 타이머를 그대로 사용.
 //   --http=PORT : HTTP 제어 포트 (기본 5555)  --bind=ADDR (기본 127.0.0.1)  --token=문자열 (Authorization: Bearer)
+//   --jsprof : 렌더러(JS) 프레임 시간(rAF 간격, frame()/render() 소요, GC 추정)을 1초마다 [jstat] 로 기록 (진단용)
 //   --autoplay : 로딩 후 Run Setting 시작 페이지부터 자동 재생 (기본은 출력을 비워 두고 명령 대기)
 //   --view : 전체화면 창으로 재생 (DISPLAY 필요, 인코딩 없음)
 //   --preview : 인코딩(UI+영상 합성)은 그대로 하면서, 그 결과를 별도 X11 창(DISPLAY 필요)에도 표시
@@ -143,6 +144,13 @@ static int g_http_port = kCtlPort;               // TCP 와 UDP 포트는 별개
 static std::string g_http_bind = "127.0.0.1";
 static std::string g_http_token;
 static bool g_autoplay = false;                  // --autoplay: 로딩 후 Run Setting 시작 페이지부터 자동 재생
+static bool g_jsprof = false;                    // --jsprof: 렌더러(JS) 프레임 시간을 1초마다 [jstat] 로 기록 (진단용)
+static std::string PlayerQuery() {              // player.html URL 의 쿼리스트링
+  std::string q;
+  if (g_autoplay) q += "?autoplay=1";
+  if (g_jsprof) q += q.empty() ? "?jsprof=1" : "&jsprof=1";
+  return q;
+}
 static std::mutex g_state_mu;                    // player 가 cefQuery('state:...') 로 올려 주는 상태 (GET /status)
 static std::string g_state = "{\"ready\":false}";
 static std::atomic<bool> g_ready{false};   // player.html 로딩 완료 신호
@@ -366,6 +374,11 @@ class Client : public CefClient,
                bool, CefRefPtr<Callback> cb) override {
     const std::string r = request.ToString();
 
+    if (r.rfind("prof:", 0) == 0) {   // --jsprof: player 의 프레임 시간 측정값
+      printf("[jstat] %s\n", r.c_str() + 5);
+      cb->Success("ok");
+      return true;
+    }
     if (r.rfind("save:", 0) == 0) {
       std::ofstream f(g_project, std::ios::binary | std::ios::trunc);
       if (!f) { cb->Failure(1, "cannot write " + g_project); return true; }
@@ -1381,6 +1394,7 @@ int main(int argc, char* argv[]) {
     else if (a.rfind("--bind=", 0) == 0) g_http_bind = a.substr(7);
     else if (a.rfind("--token=", 0) == 0) g_http_token = a.substr(8);
     else if (a == "--autoplay") g_autoplay = true;
+    else if (a == "--jsprof") g_jsprof = true;
     else if (a == "--accel") g_paint_mode = PaintMode::kAccel;
     else if (a == "--gpu") g_gpu_composite = true;
     else if (a == "--no-encode") g_encode = false;
@@ -1449,7 +1463,7 @@ int main(int argc, char* argv[]) {
     CefBrowserSettings bs;
     bs.windowless_frame_rate = g_paint_fps;
     bs.background_color = CefColorSetARGB(0, 0, 0, 0);   // 투명: 페이지 배경이 없으면 영상이 비침
-    CefBrowserHost::CreateBrowser(wi, client, "file://" + g_webdir + "/" + g_page + (g_autoplay ? "?autoplay=1" : ""), bs,
+    CefBrowserHost::CreateBrowser(wi, client, "file://" + g_webdir + "/" + g_page + PlayerQuery(), bs,
                                   nullptr, nullptr);
     }
 #if 0

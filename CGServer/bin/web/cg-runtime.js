@@ -610,8 +610,35 @@ function frameDelta(now) {
   return vclock - prev;
 }
 
+// ---------- 프레임 시간 측정 (진단: player.html?jsprof=1, cg-streamer --jsprof) ----------
+// 1초마다 native 로 보내 [jstat] 로그에 남긴다: rAF 간격(놓친 프레임), frame()/render() 소요, GC 추정(JS 힙이 줄어든 횟수).
+const PROF = new URLSearchParams(location.search).get('jsprof') === '1';
+const prof = { t0: 0, lastNow: 0, n: 0, dtMax: 0, late: 0, frSum: 0, frMax: 0, rnSum: 0, rnMax: 0, slow: 0, gc: 0, heap: 0 };
+function profRender(ms) { prof.rnSum += ms; if (ms > prof.rnMax) prof.rnMax = ms; }
+function profFrame(now, ms) {
+  if (prof.lastNow) {
+    const dt = now - prof.lastNow;
+    if (dt > prof.dtMax) prof.dtMax = dt;
+    if (dt > 25) prof.late++;   // 60Hz 에서 1.5프레임 넘게 벌어짐 = 프레임을 놓침
+  }
+  prof.lastNow = now;
+  prof.n++; prof.frSum += ms; if (ms > prof.frMax) prof.frMax = ms;
+  if (ms > 8) prof.slow++;
+  const heap = performance.memory ? performance.memory.usedJSHeapSize : 0;
+  if (prof.heap && heap < prof.heap - 512 * 1024) prof.gc++;   // 프레임 사이에 힙이 0.5MB 넘게 줄면 GC 로 본다
+  prof.heap = heap;
+  if (!prof.t0) prof.t0 = now;
+  if (now - prof.t0 >= 1000) {
+    const f = (x) => x.toFixed(1);
+    q(`prof:raf=${prof.n} dt_max=${f(prof.dtMax)}ms late=${prof.late} frame avg=${f(prof.frSum / prof.n)} max=${f(prof.frMax)}ms ` +
+      `render avg=${f(prof.rnSum / prof.n)} max=${f(prof.rnMax)}ms slow8=${prof.slow} gc=${prof.gc} heap=${f(heap / 1048576)}MB`).catch(() => {});
+    Object.assign(prof, { t0: now, n: 0, dtMax: 0, late: 0, frSum: 0, frMax: 0, rnSum: 0, rnMax: 0, slow: 0, gc: 0 });
+  }
+}
+
 function frame(now) {
   requestAnimationFrame(frame);
+  const p0 = PROF ? performance.now() : 0;
   const delta = frameDelta(now);
   if (!project) return;
 
@@ -634,8 +661,9 @@ function frame(now) {
   if (sec !== lastSec) { lastSec = sec; if (hasClock()) dirty = true; }
 
   syncVideo();
-  if (dirty) { dirty = false; render(); }
+  if (dirty) { dirty = false; const r0 = PROF ? performance.now() : 0; render(); if (PROF) profRender(performance.now() - r0); }
   report(now);
+  if (PROF) profFrame(now, performance.now() - p0);
 }
 
 function hasClock() {
