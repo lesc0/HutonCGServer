@@ -399,6 +399,31 @@ function prewarmTextCache(proj) {
   return n;
 }
 
+// 진단(--jsprof): 텍스트가 자기 박스(w×h)에 들어가는지 점검한다. 단말에 없는 글꼴(맑은 고딕, Arial 등)은 다른 글꼴로 대체되어 글자 폭이 달라지므로
+// 에디터(PC)에서 맞춰 둔 박스를 넘칠 수 있다. drawText 의 줄바꿈 규칙(폭 item.w - 8, 높이 item.h 를 넘으면 그리지 않음)을 그대로 따른다.
+function fitReport(proj) {
+  const m = document.createElement('canvas').getContext('2d');
+  const out = [];
+  for (const [pi, page] of proj.pages.entries()) for (const item of page.items) {
+    if (item.type !== 'text' || !item.text) continue;
+    const scale = item.textWidth / 100;
+    let lines = 1, lw = 0, maxw = 0, y = 4, cut = false, at = 0;
+    for (const ch of item.text) {
+      const run = (item.runs || []).reduce((s, r) => (at >= r.start && at < r.end ? Object.assign({}, s, r) : s), {});
+      m.font = `${(run.italic ?? item.italic) ? 'italic ' : ''}${(run.bold ?? item.bold) ? 'bold ' : ''}${run.size ?? item.size}px "${run.family ?? item.family}"`;
+      const w = (m.measureText(ch).width * (ch === ' ' ? item.space / 100 : 1) + item.kerning) * scale;
+      if (ch === '\n' || (lw + w > item.w - 8 && lw > 0)) { maxw = Math.max(maxw, lw); lines++; lw = 0; y += item.size * (1 + item.leading / 100); if (y > item.h) cut = true; }
+      if (ch !== '\n') lw += w;
+      at += ch.length;
+    }
+    maxw = Math.max(maxw, lw);
+    const crawl = item.effect === 'crawl' || item.effect === 'roll';
+    // crawl/roll 은 박스가 글자 전체를 담아야 하고(w), 일반 텍스트는 줄 수가 박스 높이에 들어가야 한다(h)
+    if (crawl ? (lines > 1 || cut) : cut) out.push(`p${pi + 1} "${item.name}" ${item.family} ${item.size}px: lines=${lines} 필요폭=${maxw.toFixed(0)} 박스=${item.w}x${item.h}${cut ? ' 잘림' : ''}`);
+  }
+  q(`prof:fit ${out.length ? out.length + '건 넘침 ' + out.join(' | ') : '모든 텍스트가 박스에 들어감'}`).catch(() => {});
+}
+
 function drawItem(c, item, time, page) {
   if (item.hidden || item.type === 'audio' || item.type === 'video') return;   // 영상은 네이티브가 그림
   const state = effectState(item, time, page.mode, page.duration);
@@ -743,6 +768,7 @@ fit();
   await preloadFonts(project);
   await document.fonts.ready;
   prewarmTextCache(project);
+  if (PROF) fitReport(project);
   const srcs = new Set();
   for (const p of project.pages) for (const i of p.items) if (i.type === 'image' && i.src) srcs.add(i.src);
   for (const s of srcs) imageFor(s);
