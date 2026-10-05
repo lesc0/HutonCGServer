@@ -233,7 +233,16 @@ lagged_frames += count - 1;  vframe_info.count = count;
 - 단말 송출을 PC 로 받아 `ffprobe -show_entries packet=pts_time` 로 PTS 간격을 본다. 출력이 `값,` 처럼 끝에 쉼표와 CR 이 붙어 파싱 때 제거해야 하고, PowerShell 스크립트 파일은 실행 정책 때문에 `-ExecutionPolicy Bypass` 가 필요하다. 캡처가 GOP 중간에서 시작하면 첫 약 1초는 `non-existing PPS` 로 디코딩되지 않는다(정상).
 - Git Bash 에서 한글 인자는 콘솔 코드페이지로 깨지는 경우가 있어 한글 파일명·JSON 은 파이썬으로 UTF-8 을 직접 다룬다.
 
-### 15) 개발 보조
+### 15) PTS 33비트 되감김(약 26.5시간): ffmpeg 가 어떻게 처리하나 (소스·실험 확인)
+
+- 우리 PTS 는 `CLOCK_MONOTONIC`(시스템 가동 시간)이라 TS 의 33비트(90kHz, 95,443.7초 ≈ 26.5시간)에서 되감긴다(단말 가동 4.6시간 시점에 약 21.9시간 남음). 단말은 NTP 동기화 중이고 커널 주파수 보정(slew) 31.8ppm.
+- **실험**: `ffmpeg -f lavfi -i testsrc ... -output_ts_offset 95440 -f mpegts` 로 경계 3.7초 앞에서 시작하는 TS 를 만들어 `ffprobe` 비교. 보정 켬(기본)은 시작 `-2.3177` → `-0.0177` → `+0.0490` 으로 끊김 없이 이어지고, `-correct_ts_overflow 0` 은 `95443.7` → `0.0490` 으로 되감김이 그대로 보인다.
+- **ffmpeg 5.1.6 소스 확인**(단말은 5.1.9, 같은 계열): `libavformat/demux.c` — `update_wrap_reference`(469~492줄)가 첫 dts/pts 의 33비트 값에서 **60초 앞을 기준**(`pts_wrap_reference`)으로 삼고, 첫 값이 범위의 마지막 1/8(≈3.3시간) 밖이면 `ADD_OFFSET`(기준보다 작아지는 값에 2^33 을 더함), 안이면 `SUB_OFFSET`(기준 이상인 값에서 2^33 을 빼 경계 이전을 음수로)으로 정한다. `wrap_timestamp`(49~62줄)가 패킷마다 dts/pts 에 적용(626~627줄). 981~987줄은 한 패킷에서 dts 만 되감긴 경우(B-프레임)를 보정. TS demuxer 는 `avpriv_set_pts_info(st, 33, 1, 90000)`(`mpegts.c` 921줄). `fftools/ffmpeg.c` 는 시작 시각 보정(`wrap_correction_done`, 4018~4049줄)과 10초(`dts_delta_threshold`) 넘는 점프 보정(4087~4090줄)을 추가로 한다.
+- **우리 muxer**(`mpegtsenc.c` `write_pts`): `(pts >> 30) & 0x07` 등 하위 33비트만 PES 헤더에 쓰므로 값이 2^33 을 넘어도 자동으로 잘려 들어간다.
+- 결론: ffmpeg 계열 수신기는 경계를 넘어도 이어 붙인다. **그 밖의 수신기(VLC, GStreamer, 하드웨어 디코더, 방송 장비)는 미확인** — 해당 단말로 경계 근처 TS 를 보내 보는 시험이 필요.
+- 소스는 임시로 받아 확인한 뒤 삭제(저장소에는 넣지 않음).
+
+### 16) 개발 보조
 
 - 단말 SSH 공개키 등록: `bin/setup-ssh-key.ps1`(Windows PowerShell, 키 생성/등록/접속 확인). 한글이 깨지지 않도록 UTF-8 **BOM** 으로 저장. `bin/*` 가 gitignore 라 저장소에는 올라가지 않는다(올리려면 `.gitignore` 에 예외 추가).
 - 임시로 PC 로 UDP 송출: `CG_UDP=<ip>:1234 bin/start.sh`. PC 에서 `UdpClient(1234)` 로 받아 TS 동기 바이트(0x47)와 `ffprobe -show_entries packet=pts` 로 PTS 를 확인했다.
