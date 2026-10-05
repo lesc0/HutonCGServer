@@ -356,13 +356,15 @@ function drawShape(c, i) {
 // (방송 CG 장비가 텍스트를 텍스처로 구워두고 GPU로 이동만 시키는 것과 같은 발상.)
 // 캔버스에만 적용하는 캐시라 레이어 순서/폰트 렌더링은 기존 그대로 유지됨(CSS 전환과 달리 안전).
 const textCache = new Map();   // item.id -> {canvas, sig}
+let fontEpoch = 0;   // 폰트가 (늦게) 로드되면 올라간다: 대체 글꼴로 구워 둔 캐시를 버리기 위함
+if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', () => { fontEpoch++; });
 function cachedTextCanvas(item, time) {
   const text = item.type === 'clock' || item.type === 'timer' ? clockText(item, time) : item.text;
   // 매 프레임 큰 배열을 JSON 으로 직렬화하면 CPU/GC 부담으로 프레임이 튈 수 있다. 같은 항목 객체이고 글자·runs 가 그대로면 (프로젝트는
   // 읽을 때 새 객체가 되므로 속성 변경은 항상 새 객체) 이전에 그려 둔 캔버스를 그대로 쓴다.
   const hit = textCache.get(item.id);
-  if (hit && hit.item === item && hit.text === text && hit.runs === item.runs) return hit.canvas;
-  const sig = JSON.stringify([text, item.size, item.family, item.bold, item.italic, item.fill, item.stroke,
+  if (hit && hit.item === item && hit.text === text && hit.runs === item.runs && hit.epoch === fontEpoch) return hit.canvas;
+  const sig = JSON.stringify([fontEpoch, text, item.size, item.family, item.bold, item.italic, item.fill, item.stroke,
     item.strokeWidth, item.edge2, item.edge2Width, item.edge3, item.edge3Width, item.w, item.h, item.align,
     item.kerning, item.space, item.textWidth, item.leading, item.thickness, item.underline, item.cRotate,
     item.outline, item.shadow, item.shadowColor, item.shadowBlur, item.shadowDepth, item.shadowAngle, item.runs]);
@@ -377,7 +379,7 @@ function cachedTextCanvas(item, time) {
     rec = { canvas: oc, sig };
     textCache.set(item.id, rec);
   }
-  rec.item = item; rec.text = text; rec.runs = item.runs;
+  rec.item = item; rec.text = text; rec.runs = item.runs; rec.epoch = fontEpoch;
   return rec.canvas;
 }
 
@@ -400,7 +402,9 @@ function drawItem(c, item, time, page) {
   c.scale(item.flipX ? -1 : 1, item.flipY ? -1 : 1);
   if (item.type === 'text' || item.type === 'clock' || item.type === 'timer') {
     const shown = state.effect === 'text' ? Object.assign({}, item, { text: item.text.slice(0, Math.ceil(item.text.length * state.progress)) }) : item;
-    if (state.effect === 'crawl' || state.effect === 'roll') c.drawImage(cachedTextCanvas(shown, time), 0, 0);
+    // crawl/roll 은 물론, 글자가 점점 나타나는 'text' 효과와 그림자(캐시 캔버스 경계에서 잘림)가 없는 일반 텍스트/시계도 캐시해서
+    // 매 프레임 글자 단위 fillText 를 하지 않는다(정적 텍스트가 많은 프로젝트에서 CEF 렌더러가 60fps 를 못 맞추던 원인).
+    if (state.effect === 'crawl' || state.effect === 'roll' || (state.effect !== 'text' && !item.shadow)) c.drawImage(cachedTextCanvas(shown, time), 0, 0);
     else drawText(c, shown, time);
   } else if (item.type === 'image') {
     const im = imageFor(item.src);
