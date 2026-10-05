@@ -158,6 +158,22 @@ static std::atomic<bool> g_quit{false};
 static std::atomic<uint64_t> g_paints{0};
 // OnPaint 도착 간격 진단(1초 단위로 [estat] 에 출력 후 초기화): 가장 큰 간격(ms)과 25ms(60fps 의 1.5프레임) 넘게 늦은 횟수
 static std::atomic<uint32_t> g_gap_max_us{0}, g_gap_late{0}, g_gap_big{0};
+// OnPaint 한 번에 걸리는 시간(복사·락 포함) 진단: CEF 는 OnPaint 가 끝나야 다음 프레임을 진행하므로 오래 걸리면 프레임을 놓친다
+static std::atomic<uint64_t> g_op_sum_us{0}, g_op_n{0};
+static std::atomic<uint32_t> g_op_max_us{0};
+static double OnPaintAvgMs() {   // 마지막 호출 이후 평균(ms). 호출하면 초기화
+  const uint64_t n = g_op_n.exchange(0), sum = g_op_sum_us.exchange(0);
+  return n ? sum / 1000.0 / n : 0.0;
+}
+struct OnPaintTimer {
+  std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+  ~OnPaintTimer() {
+    const uint32_t us = (uint32_t)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+    g_op_sum_us += us; g_op_n++;
+    uint32_t m = g_op_max_us.load();
+    while (us > m && !g_op_max_us.compare_exchange_weak(m, us)) {}
+  }
+};
 static pid_t g_child = 0;
 static CefRefPtr<CefMessageRouterBrowserSide> g_router;
 
@@ -265,6 +281,7 @@ class Client : public CefClient,
                const void* buffer, int w, int h) override {
     if (g_paint_mode != PaintMode::kSoftware) return;
     if (type != PET_VIEW || w != kW || h != kH) return;
+    OnPaintTimer op_timer;   // 이 함수가 끝날 때 소요 시간을 기록
     {   // 도착 간격 진단
       static auto last = std::chrono::steady_clock::time_point{};
       const auto now = std::chrono::steady_clock::now();
@@ -678,9 +695,9 @@ static void EncodeLoop(CefRefPtr<Client> client) {
         ql = g_store.q.size();
         dropped = g_store.dropped;
       }
-      printf("[estat] enc=%.1ffps paint=%llu/s gap_max=%.0fms late25=%u big100=%u out=%.2fMbps rga=%.1fms video=%s uiq=%zu under=%llu drop=%llu miss=%llu accel_fail=%llu\n",
+      printf("[estat] enc=%.1ffps paint=%llu/s gap_max=%.0fms late25=%u big100=%u op_avg=%.1fms op_max=%.0fms out=%.2fMbps rga=%.1fms video=%s uiq=%zu under=%llu drop=%llu miss=%llu accel_fail=%llu\n",
              frames / sec, (unsigned long long)(p - last_paints), g_gap_max_us.exchange(0) / 1000.0, g_gap_late.exchange(0),
-             g_gap_big.exchange(0), bytes * 8.0 / sec / 1e6, g_encoder.TakeComposeMs(),
+             g_gap_big.exchange(0), OnPaintAvgMs(), g_op_max_us.exchange(0) / 1000.0, bytes * 8.0 / sec / 1e6, g_encoder.TakeComposeMs(),
              g_hdmi.Active() ? (g_hdmi.HasSignal() ? "hdmirx" : "hdmirx(no-signal)")
                              : g_video.Active() ? "on" : "off", ql, (unsigned long long)underflows,
              (unsigned long long)dropped, (unsigned long long)missed, (unsigned long long)g_accel_fail.load());
