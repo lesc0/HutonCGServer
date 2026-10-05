@@ -665,7 +665,7 @@ static void EncodeLoop(CefRefPtr<Client> client) {
         ql = g_store.q.size();
         dropped = g_store.dropped;
       }
-      printf("[stat] enc=%.1ffps paint=%llu/s gap_max=%.0fms late25=%u big100=%u out=%.2fMbps rga=%.1fms video=%s uiq=%zu under=%llu drop=%llu miss=%llu accel_fail=%llu\n",
+      printf("[stat]        enc=%.1ffps paint=%llu/s gap_max=%.0fms late25=%u big100=%u out=%.2fMbps rga=%.1fms video=%s uiq=%zu under=%llu drop=%llu miss=%llu accel_fail=%llu\n",
              frames / sec, (unsigned long long)(p - last_paints), g_gap_max_us.exchange(0) / 1000.0, g_gap_late.exchange(0),
              g_gap_big.exchange(0), bytes * 8.0 / sec / 1e6, g_encoder.TakeComposeMs(),
              g_hdmi.Active() ? (g_hdmi.HasSignal() ? "hdmirx" : "hdmirx(no-signal)")
@@ -1479,7 +1479,7 @@ int main(int argc, char* argv[]) {
         if (!g_encode && !g_view && now - last_stat >= std::chrono::seconds(1)) {
           last_stat = now;   // --no-encode: EncodeLoop 대신 paint 통계
           uint64_t p = g_paints.load();
-          printf("[stat] no-encode paint=%llu/s\n", (unsigned long long)(p - last_paints));
+          printf("[stat]        no-encode paint=%llu/s\n", (unsigned long long)(p - last_paints));
           last_paints = p;
         }
         if (seconds > 0 && std::chrono::steady_clock::now() - t0 > std::chrono::seconds(seconds))
