@@ -2,7 +2,7 @@
 // 클릭하면 현재 페이지의 내용이 이 템플릿으로 바뀐다(page.tsx). 글자/색/위치는 적용 후 자유롭게 수정.
 import {Item,Page,Kind,make,blankPage} from './model';
 
-const FONT='맑은 고딕';
+const FONT='NotoSansKR';
 const NAVY='#0a2a52',DARK='#101830',RED='#c8202c',GOLD='#ffd23c',WHITE='#ffffff';
 const bar=(x:number,y:number,w:number,h:number,fill:string,p:Partial<Item>={})=>make('rect',{name:'바탕',x,y,w,h,fill,effect:'wipe',outEffect:'wipe',inDuration:.6,outDuration:.6,...p});
 const txt=(text:string,x:number,y:number,w:number,size:number,p:Partial<Item>={})=>make('text',{name:text.split('\n')[0].slice(0,12)||'자막',text,x,y,w,h:Math.round(size*1.35)*(text.split('\n').length),size,fill:WHITE,family:FONT,bold:true,effect:'fade',outEffect:'fade',inDuration:.6,outDuration:.6,...p});

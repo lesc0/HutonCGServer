@@ -23,7 +23,7 @@ const W = 1920, H = 1080;
 const ITEM_DEFAULTS = {
   type: 'rect', name: '', text: '', x: 250, y: 400, w: 1400, h: 180, size: 100, fill: '#ffffff', stroke: '#000000',
   strokeWidth: 0, edge2: '#ffffff', edge2Width: 0, edge3: '#000000', edge3Width: 0, bold: false, italic: false,
-  underline: false, outline: false, family: 'Arial', align: 'left', opacity: 1, rotation: 0, cRotate: 0,
+  underline: false, outline: false, family: 'NotoSansKR', align: 'left', opacity: 1, rotation: 0, cRotate: 0,
   textWidth: 100, space: 100, thickness: 0, kerning: 0, leading: 20, flipX: false, flipY: false, shadow: false,
   shadowColor: '#000000', shadowBlur: 4, shadowDepth: 8, shadowAngle: 45, hidden: false, start: 0, duration: 10,
   effect: 'none', outEffect: 'none', inDuration: 1, outDuration: 1, direction: 'left', speed: 1, volume: 1, trim: 0,
