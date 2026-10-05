@@ -84,6 +84,7 @@ lagged_frames += count - 1;  vframe_info.count = count;
 - 영상 PTS 481개 모두 증가(간격 평균 16.65ms, 최소 1~2ms, 최대 33ms). 음성 PTS 377개 모두 증가, 간격은 평균 21.33ms 이지만 7~32ms 로 **불규칙**(status 를 읽은 시각이 그대로 PTS 라서 정상. 간격이 일정할 필요는 없음).
 - V4L2 timestamp 진단: age 평균 0.0~0.1ms, 프레임 간격 최대 16.7ms(60Hz 규칙적). muxer 경고 없음. 시작 시 `Packets poorly interleaved, failed to avoid negative timestamp` 가 한 번 나오는 것은 이전에도 있었음(AAC 인코더 지연).
 - **사용자 확인: 비디오/오디오 싱크 일치.** 이전(믹서 경로)에 있던 오디오 잡음이 직접 송출 후 없어짐(믹서의 `live_pos_` 재동기로 샘플이 겹치거나 비던 것이 원인일 가능성, 미확인). 오디오 `kLiveLatency` 는 라이브 직접 송출에는 쓰이지 않는다.
+- **사용자 확인: 영상 파일(mp4) 재생 중에도 싱크 일치.** 이 경로는 영상 PTS=틱 시각(`CLOCK_MONOTONIC`), 음성=믹서(`PushAt`, 재생 예정 시각)이며 `kLiveLatency` 는 쓰지 않는다. 영상 PTS 만 프레임 번호에서 틱 시각으로 바뀌었는데도 두 PTS 가 같은 시계 위라 맞는 것으로 보인다.
 
 #### 남은 문제 / 결정 필요
 - 같은 시도에서 `enc` 가 51~58fps, `drop`/`miss` 가 1분에 수백까지 쌓이는 때가 있었고(재시작마다 편차 큼, `miss=0` 인 때도 있음) 위 2026-10-04 의 Debian 12 + 4K HDMI 증상과 같은 패턴. 음성 변경과의 상관은 불명(이전 커밋과 같은 조건 비교 미실시).
