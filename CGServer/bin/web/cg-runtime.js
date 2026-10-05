@@ -383,6 +383,22 @@ function cachedTextCanvas(item, time) {
   return rec.canvas;
 }
 
+// 프로젝트를 읽은 직후 모든 페이지의 (캐시되는) 텍스트를 미리 구워 둔다. 안 그러면 페이지가 바뀌는 순간 그 페이지의 글자들을
+// 한꺼번에 처음 그리느라 한 프레임이 100ms 넘게 걸린다(단말 측정: render 131ms). 재생(ready) 시작 전에 해 두므로 끊김이 보이지 않는다.
+function prewarmTextCache(proj) {
+  let n = 0;
+  for (const page of proj.pages) {
+    for (const item of page.items) {
+      if (item.type !== 'text' && item.type !== 'clock' && item.type !== 'timer') continue;
+      if (item.hidden || item.effect === 'text') continue;
+      if (!(item.effect === 'crawl' || item.effect === 'roll' || !item.shadow)) continue;   // drawItem 의 캐시 조건과 같아야 함
+      cachedTextCanvas(item, 0);
+      n++;
+    }
+  }
+  return n;
+}
+
 function drawItem(c, item, time, page) {
   if (item.hidden || item.type === 'audio' || item.type === 'video') return;   // 영상은 네이티브가 그림
   const state = effectState(item, time, page.mode, page.duration);
@@ -481,6 +497,7 @@ async function reloadProject() {
   let next;
   try { next = fixProject(JSON.parse(await q('load'))); } catch (e) { console.error('[cg] reload 실패:', e); return false; }
   await preloadFonts(next);
+  prewarmTextCache(next);
   project = next;
   stamps = [idleChannel(), idleChannel()];
   globalCh = idleChannel();
@@ -725,6 +742,7 @@ fit();
   // 폰트 -> 이미지 로딩 후 첫 프레임 (기존 player.html 과 같은 절차)
   await preloadFonts(project);
   await document.fonts.ready;
+  prewarmTextCache(project);
   const srcs = new Set();
   for (const p of project.pages) for (const i of p.items) if (i.type === 'image' && i.src) srcs.add(i.src);
   for (const s of srcs) imageFor(s);
