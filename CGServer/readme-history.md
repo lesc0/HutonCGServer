@@ -240,6 +240,7 @@ lagged_frames += count - 1;  vframe_info.count = count;
 - **ffmpeg 5.1.6 소스 확인**(단말은 5.1.9, 같은 계열): `libavformat/demux.c` — `update_wrap_reference`(469~492줄)가 첫 dts/pts 의 33비트 값에서 **60초 앞을 기준**(`pts_wrap_reference`)으로 삼고, 첫 값이 범위의 마지막 1/8(≈3.3시간) 밖이면 `ADD_OFFSET`(기준보다 작아지는 값에 2^33 을 더함), 안이면 `SUB_OFFSET`(기준 이상인 값에서 2^33 을 빼 경계 이전을 음수로)으로 정한다. `wrap_timestamp`(49~62줄)가 패킷마다 dts/pts 에 적용(626~627줄). 981~987줄은 한 패킷에서 dts 만 되감긴 경우(B-프레임)를 보정. TS demuxer 는 `avpriv_set_pts_info(st, 33, 1, 90000)`(`mpegts.c` 921줄). `fftools/ffmpeg.c` 는 시작 시각 보정(`wrap_correction_done`, 4018~4049줄)과 10초(`dts_delta_threshold`) 넘는 점프 보정(4087~4090줄)을 추가로 한다.
 - **우리 muxer**(`mpegtsenc.c` `write_pts`): `(pts >> 30) & 0x07` 등 하위 33비트만 PES 헤더에 쓰므로 값이 2^33 을 넘어도 자동으로 잘려 들어간다.
 - 결론: ffmpeg 계열 수신기는 경계를 넘어도 이어 붙인다. **그 밖의 수신기(VLC, GStreamer, 하드웨어 디코더, 방송 장비)는 미확인** — 해당 단말로 경계 근처 TS 를 보내 보는 시험이 필요.
+- **시험 필요**: 송출을 **26.5시간 넘게 연속으로 돌려 33비트 경계를 실제로 통과하는 시험**이 아직 없다(수신 단말별로 되감김 후 영상·음성이 끊기지 않는지, PCR 포함). 지금 단말은 가동 시간이 PTS 이므로 부팅 후 26.5시간 시점이 경계(단말을 재부팅하면 다시 0부터). 오래 기다리지 않고 미리 보려면 경계 근처(`-output_ts_offset 95440`)에서 시작하는 TS 를 ffmpeg 로 만들어 해당 수신 단말로 보내 본다.
 - 소스는 임시로 받아 확인한 뒤 삭제(저장소에는 넣지 않음).
 
 ### 16) 개발 보조
