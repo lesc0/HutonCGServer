@@ -76,6 +76,7 @@ cd /home/pi/work/github.cgserver/CGServer/src/cg-streamer
 
 ## 실행
 `CGServer/bin/start.sh` (rebuild.sh / stop.sh 참고). 절차는 `readme-test.txt`.
+- 에디터(`src/cg-editor`) 코드를 바꾸면 단말에서 `bin/rebuild.sh` 로 다시 빌드해야 한다(송출·에디터를 내렸다 올림). 단말에 로컬 수정(`bin/cgsetup.cfg`, 에디터로 고친 프로젝트 JSON)이 있으면 `git pull --autostash` 를 쓰고, 복원이 충돌하면 `git checkout --theirs -- <파일>`(stash=로컬 수정본)로 되살린 뒤 다시 반영한다. 송출만 바꾼 경우(`bin/web/*.js` 등)는 cg-streamer 재시작만으로 충분.
 ```bash
 cd /home/pi/work/github.cgserver/CGServer/src/cg-editor && ./build.sh   # 최초 1회(npm ci + Next 빌드)
 cd ../../bin && DISPLAY=:0 ./start.sh      # cg-editor(8080) + cg-streamer + 키오스크 (CG_SKIP_KIOSK=1 이면 키오스크 생략)

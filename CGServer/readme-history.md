@@ -145,7 +145,35 @@ lagged_frames += count - 1;  vframe_info.count = count;
 - 시행착오: 빌드 중 오류 메시지 문자열을 생성 스크립트의 `chr(92)` 로 만들다가 C++ 소스에 그대로 들어가 컴파일 실패 → 수정. `bin/cgsetup.cfg` 는 단말에 로컬 수정이 있어 주석은 건드리지 않고 `readme-dev.md` 에 설명.
 - 미확인: 라이브 HDMI 입력(59.94 입력)에서 설정을 59.94 로 맞췄을 때 프레임 반복·건너뜀이 줄어드는지.
 
-### 9) 개발 보조
+### 9) 폰트 정리 — 단말에 없는 윈도우 폰트를 빼고 무료 폰트로 교체
+
+#### 문제
+- 프로젝트들이 `맑은 고딕`(166개 텍스트), `Arial Black`(180), `Arial`(2) 을 쓰는데 단말(Debian 12)에는 없다(`fc-match` 가 모두 DejaVu Sans, 한글은 WenQuanYi Zen Hei 로 대체). Microsoft 상용 폰트라 저장소에 넣어 배포도 못 한다. `돋움·바탕·궁서·Georgia·Times New Roman` 도 같은 이유.
+- 대체 글꼴은 글자 폭이 달라 박스에 안 들어갈 수 있다. `--jsprof` 에 `fitReport`(텍스트가 박스 w×h 에 들어가는지 점검, `[jstat] fit`)를 넣어 확인: `생활정보-문자방송` p2 "안내 자막"(필요폭 3135 / 박스 3167)과 `가로스크롤-예제`(6216 / 6228) 가 **줄이 둘로 나뉘어 스크롤 문장의 끝부분이 잘렸다**(둘째 줄은 박스 높이 밖). `drawText` 는 폭 w−8 에서 줄바꿈하기 때문.
+
+#### 조치
+- **폰트 추가**(`bin/fonts`, 모두 SIL OFL 1.1, `licenses/` 에 라이선스 전문): NotoSansKR Light/Medium/Black(가변 폰트 `NotoSansKR[wght].ttf` 를 fontTools `instancer` 로 굵기별 woff2, 각 약 2MB), Pretendard Light/Regular/Medium/Bold/Black(v1.3.9 릴리스의 woff2, 각 약 0.8MB), Spoqa Han Sans Neo Light/Regular/Medium/Bold(v3.3.0 TTF → 한글 11,172자·영문·기호만 남긴 서브셋 woff2, 각 약 0.6MB, 한자 제외. 전체 글리프는 각 5.5MB 라 저장소가 커져 서브셋으로 줄임).
+- **굵기 파일 이름 규칙**: `fontInfo`(`files-server.mjs`)는 Regular/Bold/Italic 만 같은 글꼴로 묶으므로 Light/Medium/Black 은 `NotoSansKR-Light` 처럼 별개 글꼴. `SemiBold`/`ExtraBold` 는 이름 끝이 `Bold` 라 `Pretendard-Semi`(Bold)로 잘못 묶여서 넣지 않음.
+- **에디터 글꼴 목록**(`attributes.tsx`): 윈도우 전용 이름(Arial, 맑은 고딕, 돋움, 바탕, 궁서, Arial Black, Georgia, Times New Roman)을 빼고 `bin/fonts` + `sans-serif`/`serif` 만. 기본 글꼴 `Arial` → `NotoSansKR`(`model.ts` make, 템플릿, 입력창, `cg-runtime.js` 기본값).
+- **글꼴 이름 표시**(`fontLabel`/`fontOptions`, `model.ts`): 저장되는 값은 파일 이름 기반 그대로, 목록에는 한글 이름이 정식인 폰트는 한글(나눔고딕, 고운돋움, 주아, 도현…), 영문 이름이 정식인 폰트는 영어(Noto Sans KR, Pretendard, Spoqa Han Sans Neo, IBM Plex Sans KR, Gothic A1). 순서는 한글 이름 → 영문 이름 → 기본 글꼴 → 목록에 없는 현재 글꼴(옛 프로젝트), 같은 폰트는 Thin<Light<기본<Medium<Black.
+- **옛 프로젝트의 글꼴 변경**: 맑은 고딕·Malgun Gothic·Arial·Helvetica → NotoSansKR, Arial Black → NotoSansKR-Black, 돋움·Dotum → NanumGothic, 바탕·Batang·궁서·Gungsuh·Georgia·Times New Roman → NanumMyeongjo. (1) `bin/project/*.json` 7개의 `"family"` 문자열만 정규식 치환(431곳, 서식·줄바꿈 유지), (2) 에디터(`normalizeProject` 래퍼, `LEGACY_FONTS`)와 송출 엔진(`cg-runtime.js` `fixItem`)이 읽을 때 같은 규칙으로 치환(글자 일부 서식 `runs` 포함. 두 곳의 표는 같게 유지).
+- **검증**: 단말에서 9개 프로젝트(저장소 7 + 단말에만 있던 2)를 새 폰트로 돌려 모두 "모든 텍스트가 박스에 들어감", 앞서 잘리던 크롤도 해결. NotoSansKR/Pretendard/SpoqaHanSansNeo 로 `생활정보` 를 돌렸을 때 `paint` 59.0~59.9.
+- 폰트 출처·라이선스 확인: 고운돋움/바탕은 개인 디자이너(저장소 `yangheeryu`), 주아·도현·연성은 배달의민족 BM 폰트가 Google Fonts 에 OFL 로 올라온 것(제 기억 기준, 파일에는 회사명 없음). 상업 방송 사용은 OFL 이라 가능, 폰트 단독 판매만 금지.
+
+### 10) 에디터 UI 변경 (Attributes 폭, Symbol 탭, 텍스트 크기 조절, 프로젝트 이름 변경)
+
+1. **Attributes 의 Name/자막 내용 칸 폭**: 마지막 CSS 규칙(`.textproperties{flex:0 0 140px}`)이 고정하고 있어 그 값만 140 → 200px 로 늘린 뒤 사용자 요청으로 2px 씩 세 번 줄여 **194px**.
+2. **Style Catalog > Symbol 탭**(`symbols.tsx`): 특수문자를 누르면 선택한 문자 개체의 "자막 내용" 칸 커서 위치(드래그 선택이면 그 부분 대체, 칸을 안 눌렀으면 글 끝)에 삽입하고 칸에 포커스·커서를 되돌림. 그룹: 일반 기호, 화살표, 숫자·글자 묶음, 괄호·인용, **온도·날씨**(℃ ℉ ° ± ☀ ☁ ☂ ❄ 등, 사용자 요청), 단위·통화, 수학, 로마·그리스, 음표·기타, 점·선·구분, 상표·저작권. 문자 개체(text)만(연결 파일·시계·타이머 제외), 글자가 바뀌면 부분 서식(`runs`)은 기존 입력 칸처럼 초기화. 컬러 이모지는 단말에 폰트가 없어 제외.
+3. **텍스트 오브젝트 크기 조절**: 가로로 늘리면 글자 크기가 그대로인데 세로로 늘리면 글자도 커졌다. 원인은 `onTransformEnd`(`editor-canvas.tsx`)가 `size` 를 세로 배율로 키우던 것 → 문자·시계·타이머는 `size` 를 바꾸지 않고 `h` 만 변경. 드래그 중에도 글자가 늘어나 보이지 않게 `onTransform` 으로 배율을 박스 크기로 바꿔 넣었더니 **텍스트 박스가 마우스를 따라가지 않고 통째로 움직이는 문제**가 생겨(Konva 의 크기 조절 계산과 충돌) 곧바로 그 보정을 제거하고 `size` 유지만 남김. 대가: 드래그하는 동안은 글자가 늘어난 모양으로 보이고 놓으면 글자 크기 그대로.
+4. **프로젝트 열기 창의 이름 변경**: 행마다 연필 버튼. 서버에 `POST /projects/<이름>/rename`(본문 `{to}`)을 추가해 파일 이름과 프로젝트 안의 `name` 을 함께 바꾸고(저장이 `name` 으로 파일을 정하므로), 마지막 송출 프로젝트(`bin/.run/last-project`)가 그 이름이면 같이 갱신. 이름의 공백·특수문자는 저장과 같은 규칙으로 `_`, 이미 있으면 409, 경로 문자(`../`)는 정리되어 폴더 밖에 못 만든다. 열어 둔 프로젝트도 변경 가능(화면 이름과 `savedRef` 갱신). 임시 폴더에서 서버를 실제로 호출해 검증(성공·`last-project` 갱신·409·404·경로 문자·빈 이름).
+
+### 11) 단말 에디터 배포 시행착오
+
+- 에디터 코드를 바꾸면 단말에서 `bin/rebuild.sh`(메모리 3.9GB 라 송출·에디터를 내리고 빌드 후 다시 올림)가 필요. 이후 송출을 PC 로 보내는 임시 설정(`CG_UDP=10.10.10.11:1234`)으로 되돌리려고 "pull → rebuild → 송출 재시작"을 한 번에 하는 스크립트를 썼다(`rebuild.sh` 는 cfg 의 목적지로 다시 띄움).
+- 단말에 에디터로 수정한 로컬 변경(`bin/cgsetup.cfg` `realtime=on`, 프로젝트 JSON)이 있어 일반 `git pull` 은 같은 파일을 건드린 커밋과 막힌다 → `git pull --autostash`. 프로젝트 JSON 을 일괄 치환한 커밋에서 **autostash 복원이 충돌**했다(사용자가 단말에서 수정한 `생활정보-문자방송`, `자막프로젝트`). `git checkout --theirs`(stash 쪽 = 사용자 수정본)로 되살린 뒤 같은 글꼴 치환만 다시 적용해 해결, 충돌 표시·JSON 유효성 확인. 안전하게 하려고 백업 stash(`stash@{0}: autostash`)는 지우지 않고 남겨 둠.
+- 겪은 함정: `git diff --name-only` 는 저장소 루트 기준 경로라 하위 폴더에서 쓰면 `--relative` 가 필요(`pathspec ... did not match`). 생성 스크립트의 `chr(92)`(백슬래시)가 C++ 소스에 그대로 들어가 컴파일 실패한 적도 있음.
+
+### 12) 개발 보조
 
 - 단말 SSH 공개키 등록: `bin/setup-ssh-key.ps1`(Windows PowerShell, 키 생성/등록/접속 확인). 한글이 깨지지 않도록 UTF-8 **BOM** 으로 저장. `bin/*` 가 gitignore 라 저장소에는 올라가지 않는다(올리려면 `.gitignore` 에 예외 추가).
 - 임시로 PC 로 UDP 송출: `CG_UDP=<ip>:1234 bin/start.sh`. PC 에서 `UdpClient(1234)` 로 받아 TS 동기 바이트(0x47)와 `ffprobe -show_entries packet=pts` 로 PTS 를 확인했다.
