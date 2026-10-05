@@ -42,6 +42,60 @@ lagged_frames += count - 1;  vframe_info.count = count;
   - 둘 중 무엇이 나은지는 단말 수신 측(UDP TS 를 받는 쪽)이 VFR 을 받아들이는지에 달림 → 결정 필요.
   - 선행 작업: `late` 횟수를 `[stat]` 에 찍어 실제 발생 빈도를 먼저 본다.
 - 참고: OBS 의 `nanosleep` 은 상대 시간이라 호출 사이 지연이 오차에 들어감. 현재의 `sleep_until` 이 이 점에서는 유리할 것으로 추정(libstdc++ 구현은 미확인).
+- ※ 이 항목에서 말한 `sleep_until` 틱과 프레임 카운터(`n_`) PTS 는 아래 3), 5) 에서 각각 `timerfd` 와 입력 timestamp 로 바뀌었다.
+
+### 2) 단말 CEF OnPaint 60fps 측정 (코드 수정 없음)
+
+- 측정 도구: 이미 있던 `[stat]` 의 `paint/s`, `gap_max`, `late25`(25ms 넘게 늦은 횟수), `big100`, `enc`, `uiq`, `drop`.
+- **CG 만 송출(정지 화면), 56초**: `paint` 평균 59.77/s(58~61, 범위 이탈 0초), `enc` 평균 60.01, `late25` 초당 약 2회, `gap_max` 최대 39ms, `big100` 0, `drop` 0, `uiq` 1~2.
+  - 개수는 60fps 로 일정하지만 간격은 균일하지 않다. 매초 1~2번 한 프레임씩 늦게 오고 지터 버퍼가 흡수해 출력 `enc` 는 60.0.
+- **정지 화면에서도 `OnPaint` 는 60/s 로 계속 온다**(출력 0.09Mbps 인 거의 변화 없는 화면에서도). 그래서 `paint` 값만으로는 실제 애니메이션이 60fps 로 그려지는지 알 수 없다(움직이는 요소로 따로 봐야 함).
+- **틱의 정체**: CEF 문서(`cef_types.h`)에 `windowless_frame_rate` 는 "OnPaint 가 호출되는 **최대** fps(1~60, 기본 30), 못 만들면 더 낮아질 수 있음"으로 적혀 있고 vsync/EGL swap 언급은 없다. `paint` 가 정확히 60 이 아니라 59.8±2 로 흔들리는 것도 SW 타이머와 맞다 → **HW(EGL/디스플레이) 틱이 아니라 CEF 내부 타이머**로 판단. 단 내부 타이머 클래스는 CEF 소스를 보지 못해 추정. 직접 증거가 될 `--paint-fps=30` 실험은 스크립트가 `[stat]` 를 못 잡아 **미완**.
+- 어제(Debian 12, 4K HDMI 합성) 로그 825초 집계: `paint` 평균 59.84(55~64), `enc` 평균 59.92, `late25` 초당 1.34, `drop` 17(전부 HDMI 입력 구간).
+- 정책서 반영: 정책 7(CG 만 있는 구간은 CEF `OnPaint` 입력 시각 기준), 미결정 12 ☑.
+
+### 3) 송출 fps 틱을 `timerfd` 로 변경 (`main.cpp` EncodeLoop)
+
+- `sleep_until(next)` → `timerfd_create(CLOCK_MONOTONIC)` + `read()`. 만료 횟수가 1 보다 크면 밀린 틱 수를 `[stat]` 의 `miss=` 로 센다. 이전의 "한 주기 이상 늦으면 `next = tick_now` 리셋" 코드는 삭제(timerfd 는 절대 격자로 만료).
+- **밀린 틱 따라잡기(정책 4)는 미구현**(`TODO(정책 4)`): 한 번만 처리하고 건너뛴다(이전 동작과 같음). 정책서 미결정 3(따라잡기 틱에 쓸 입력) 결정 후 구현.
+- 결과: CG 만 송출 시 `enc` 60.0, `miss=0~1`.
+
+### 4) 로그를 시간 표시 일별 파일로 (`log_writer.cpp`)
+
+- `--run` 시작 시 stdout/stderr 를 파이프로 받아, 줄마다 `YYYY-MM-DD HH:MM:SS.mmm` 을 붙여 `bin/log/cg-streamer-YYYY-MM-DD.log` 에 기록. 자정에 새 파일, 30일 지난 파일은 새 파일을 열 때 삭제. CEF 자식 프로세스 출력도 같은 파일로 모인다.
+- tty 로 직접 실행하면 콘솔 그대로(켜지 않음). `CG_LOG_STDOUT=1` 로도 끌 수 있다.
+- `start.sh` 의 리다이렉트는 `log/cg-streamer.out` 으로 변경(로거 시작 전 출력용, 예: `mpp_platform: client 18 driver is not ready!`). 기존 `log/cg-streamer.log` 는 더 이상 갱신되지 않는다.
+- 단말 빌드는 `-Werror` 라 `snprintf` 버퍼(16바이트)가 `format-truncation` 으로 실패 → 64바이트로 수정. 단말에서 로거만 따로 컴파일해 줄 단위 시간 표시, stderr/자식 출력, 줄 조각 합치기, 오래된 파일 삭제를 확인(자정 전환은 미확인).
+
+### 5) 라이브 입력 PTS 를 V4L2/ALSA timestamp 로 (프레임 번호 폐기)
+
+#### 구조
+- **영상**: V4L2 `VIDIOC_DQBUF` 의 `buf.timestamp` 를 µs(`tv_sec*1000000 + tv_usec`)로 PTS 원천으로 쓰고, 직전 값 이하면 직전 + 1(단조 증가, `last_pts_us_` 로 재연결 후에도 유지). `V4L2_BUF_FLAG_ERROR` 버퍼는 다시 큐에 넣고 버린다. timestamp 가 `MONOTONIC` 이 아니면 도착 시각으로 대체(이 보드는 MONOTONIC 으로 확인, age 0.1ms).
+- **음성**: ALSA 를 `sw_params` 로 tstamp 모드 ENABLE + 타입 MONOTONIC 으로 설정하고(시계를 영상과 맞춤), `snd_pcm_status_get_tstamp` 의 µs 를 **샘플 수 보정 없이 그대로** PTS 로 사용. 믹서를 거치지 않고 1024샘플 블록으로 모아 `AudioMixer::WriteLiveDirect` → `TsMuxer::WriteAudioNs` 로 직접 송출. 직접 송출 중(마지막 호출 후 300ms)에는 믹서의 송출을 건너뛴다. 로컬 재생용으로 믹서에는 계속 넣음.
+- **muxer**: PTS = timestamp(ns)를 90kHz 로 **환산만** 한다(기준점 빼기·단조 보정 없음). 영상·음성 모두 `CLOCK_MONOTONIC` 이라 PTS 값이 곧 시스템 가동 시간. timestamp 가 없는 프레임(CG 만, 같은 입력을 다시 쓰는 틱)은 틱 시각(`CLOCK_MONOTONIC`)을 쓴다. 프레임 번호(`n_`)는 폐기.
+- 시계 설명: `CLOCK_MONOTONIC` = 부팅 후 경과 시간(시각을 바꿔도 점프하지 않음). `std::steady_clock`, `timerfd(CLOCK_MONOTONIC)`, V4L2 MONOTONIC timestamp, ALSA MONOTONIC tstamp 가 모두 같은 시계.
+
+#### 시행착오
+1. 음성을 처음엔 `htstamp` 에서 `(읽은 n + avail)` 샘플을 빼 **블록 첫 샘플 시각**으로 보정했다(age 평균 34ms). 사용자 지시로 `snd_pcm_status_get_tstamp` 그대로(보정 없음, age 0.0ms)로 변경.
+2. 이 값은 믹서(`PushLive` → 링에 배치 → 블록 시작 시각이 PTS)를 거치면 `kLiveLatency`(0.12초)와 1024샘플 격자가 섞여 "ALSA timestamp 가 그대로 PTS" 가 되지 않는다 → 라이브 음성만 믹서를 우회하도록 변경.
+3. `-Werror` 로 `tick_now` 미사용 경고가 CG_EBF 가 아닌 빌드에서 실패 → EBF 블록 안으로 이동.
+
+#### 측정 (8초 캡처, HDMI 4K 입력)
+- 영상 PTS 481개 모두 증가(간격 평균 16.65ms, 최소 1~2ms, 최대 33ms). 음성 PTS 377개 모두 증가, 간격은 평균 21.33ms 이지만 7~32ms 로 **불규칙**(status 를 읽은 시각이 그대로 PTS 라서 정상. 간격이 일정할 필요는 없음).
+- V4L2 timestamp 진단: age 평균 0.0~0.1ms, 프레임 간격 최대 16.7ms(60Hz 규칙적). muxer 경고 없음. 시작 시 `Packets poorly interleaved, failed to avoid negative timestamp` 가 한 번 나오는 것은 이전에도 있었음(AAC 인코더 지연).
+- **사용자 확인: 비디오/오디오 싱크 일치.** 이전(믹서 경로)에 있던 오디오 잡음이 직접 송출 후 없어짐(믹서의 `live_pos_` 재동기로 샘플이 겹치거나 비던 것이 원인일 가능성, 미확인). 오디오 `kLiveLatency` 는 라이브 직접 송출에는 쓰이지 않는다.
+
+#### 남은 문제 / 결정 필요
+- 같은 시도에서 `enc` 가 51~58fps, `drop`/`miss` 가 1분에 수백까지 쌓이는 때가 있었고(재시작마다 편차 큼, `miss=0` 인 때도 있음) 위 2026-10-04 의 Debian 12 + 4K HDMI 증상과 같은 패턴. 음성 변경과의 상관은 불명(이전 커밋과 같은 조건 비교 미실시).
+- 라이브 직접 송출 중에는 믹서의 다른 소리(영상 파일 음성, 효과음)가 **송출되지 않는다**(로컬 재생에는 들림). 로컬 HDMI 재생 쪽 잡음 여부는 미확인.
+- CG 만 송출할 때의 PTS 는 지금 틱 시각. 정책 7(CEF `OnPaint` 입력 시각)과 다름 → 어느 쪽으로 할지 결정 필요(OnPaint 도착 간격이 곧 PTS 지터가 되어 지터 버퍼의 평활 효과와 충돌).
+- PTS 가 시스템 가동 시간이라 TS 33비트(약 26.5시간)에서 되감김. muxer 가 처리하지만 수신 단말이 받아들이는지는 확인한 적 없음(정책서 미결정 11).
+- 밀린 틱 따라잡기(정책 4) 미구현(3) 참고).
+
+### 6) 개발 보조
+
+- 단말 SSH 공개키 등록: `bin/setup-ssh-key.ps1`(Windows PowerShell, 키 생성/등록/접속 확인). 한글이 깨지지 않도록 UTF-8 **BOM** 으로 저장. `bin/*` 가 gitignore 라 저장소에는 올라가지 않는다(올리려면 `.gitignore` 에 예외 추가).
+- 임시로 PC 로 UDP 송출: `CG_UDP=<ip>:1234 bin/start.sh`. PC 에서 `UdpClient(1234)` 로 받아 TS 동기 바이트(0x47)와 `ffprobe -show_entries packet=pts` 로 PTS 를 확인했다.
 
 ## 2026-10-04
 
