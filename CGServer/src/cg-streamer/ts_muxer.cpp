@@ -92,7 +92,7 @@ bool TsMuxer::Open(const std::string& url, int w, int h, int fps) {
   return true;
 }
 
-bool TsMuxer::Write(const uint8_t* d, size_t len) {
+bool TsMuxer::Write(const uint8_t* d, size_t len, int64_t src_ts_ns) {
   if (!fc_ || !header_ || len == 0) return false;
 
   AVPacket* pkt = av_packet_alloc();
@@ -100,13 +100,22 @@ bool TsMuxer::Write(const uint8_t* d, size_t len) {
   memcpy(pkt->data, d, len);
 
   pkt->stream_index = st_->index;
-  pkt->pts = pkt->dts = av_rescale_q(n_, AVRational{1, fps_}, st_->time_base);
   pkt->duration = av_rescale_q(1, AVRational{1, fps_}, st_->time_base);
   if (IsIdr(d, len)) pkt->flags |= AV_PKT_FLAG_KEY;
-  n_++;
 
+  using sclk = std::chrono::steady_clock;
+  if (src_ts_ns <= 0)   // 입력 timestamp 가 없으면 지금 시각 (프레임 번호로 만들지 않는다)
+    src_ts_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(sclk::now().time_since_epoch()).count();
   std::lock_guard<std::mutex> lk(mu_);
-  if (!base_set_) { base_ = std::chrono::steady_clock::now(); base_set_ = true; }
+  if (!base_set_) {   // 시간 0 = 첫 영상 timestamp (음성 PTS 도 이 base_ 기준)
+    base_ = sclk::time_point(std::chrono::duration_cast<sclk::duration>(std::chrono::nanoseconds(src_ts_ns)));
+    base_set_ = true;
+  }
+  const int64_t base_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(base_.time_since_epoch()).count();
+  int64_t pts = av_rescale_q(src_ts_ns - base_ns, AVRational{1, 1000000000}, st_->time_base);
+  if (last_vpts_ != INT64_MIN && pts <= last_vpts_) pts = last_vpts_ + 1;   // DTS 단조 증가 유지
+  last_vpts_ = pts;
+  pkt->pts = pkt->dts = pts;
   int r = av_write_frame(fc_, pkt);
   av_packet_free(&pkt);
   if (r < 0) {

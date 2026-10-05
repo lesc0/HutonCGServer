@@ -13,6 +13,7 @@ struct VideoFrameRef {   // Acquire()~Release() 동안만 유효
   int width = 0, height = 0;
   int hor_stride = 0, ver_stride = 0;   // 픽셀 단위
   int format = 0;        // RK_FORMAT_* (0 = NV12)
+  int64_t ts_ns = 0;     // 입력 timestamp(CLOCK_MONOTONIC ns, HDMI RX 는 V4L2 버퍼 timestamp). 0 = 없음
 };
 
 class AudioMixer;

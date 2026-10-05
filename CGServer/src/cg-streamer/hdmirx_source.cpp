@@ -7,6 +7,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
@@ -47,6 +48,18 @@ void HdmiRxSource::AudioRun() {
     int (*recover)(void*, int, int);
     int (*start)(void*);
     int (*close)(void*);
+    // 캡처 timestamp(CLOCK_MONOTONIC)용. 하나라도 없으면 timestamp 없이(지금 시각) 동작
+    int (*sw_malloc)(void**);
+    void (*sw_free)(void*);
+    int (*sw_current)(void*, void*);
+    int (*sw_set_tstamp_mode)(void*, void*, int);
+    int (*sw_set_tstamp_type)(void*, void*, int);
+    int (*sw_params)(void*, void*);
+    int (*st_malloc)(void**);
+    void (*st_free)(void*);
+    int (*status)(void*, void*);
+    void (*st_get_htstamp)(const void*, timespec*);
+    unsigned long (*st_get_avail)(const void*);
   } a{};
   void* lib = dlopen("libasound.so.2", RTLD_NOW);
   if (lib) {
@@ -56,7 +69,24 @@ void HdmiRxSource::AudioRun() {
     a.recover = (decltype(a.recover))dlsym(lib, "snd_pcm_recover");
     a.start = (decltype(a.start))dlsym(lib, "snd_pcm_start");
     a.close = (decltype(a.close))dlsym(lib, "snd_pcm_close");
+    a.sw_malloc = (decltype(a.sw_malloc))dlsym(lib, "snd_pcm_sw_params_malloc");
+    a.sw_free = (decltype(a.sw_free))dlsym(lib, "snd_pcm_sw_params_free");
+    a.sw_current = (decltype(a.sw_current))dlsym(lib, "snd_pcm_sw_params_current");
+    a.sw_set_tstamp_mode = (decltype(a.sw_set_tstamp_mode))dlsym(lib, "snd_pcm_sw_params_set_tstamp_mode");
+    a.sw_set_tstamp_type = (decltype(a.sw_set_tstamp_type))dlsym(lib, "snd_pcm_sw_params_set_tstamp_type");
+    a.sw_params = (decltype(a.sw_params))dlsym(lib, "snd_pcm_sw_params");
+    a.st_malloc = (decltype(a.st_malloc))dlsym(lib, "snd_pcm_status_malloc");
+    a.st_free = (decltype(a.st_free))dlsym(lib, "snd_pcm_status_free");
+    a.status = (decltype(a.status))dlsym(lib, "snd_pcm_status");
+    a.st_get_htstamp = (decltype(a.st_get_htstamp))dlsym(lib, "snd_pcm_status_get_htstamp");
+    a.st_get_avail = (decltype(a.st_get_avail))dlsym(lib, "snd_pcm_status_get_avail");
   }
+  const bool have_ts_api = lib && a.sw_malloc && a.sw_free && a.sw_current && a.sw_set_tstamp_mode && a.sw_set_tstamp_type &&
+                           a.sw_params && a.st_malloc && a.st_free && a.status && a.st_get_htstamp && a.st_get_avail;
+  void* st_h = nullptr;          // snd_pcm_status_t (타임스탬프 사용 중일 때만)
+  double age_sum = 0, age_max = 0;   // 캡처 timestamp 가 지금보다 얼마나 과거인지(ms) 1초 단위 진단
+  int age_n = 0;
+  auto now_ns = [] { return (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
   if (!lib || !a.open || !a.set_params || !a.readi || !a.recover || !a.start || !a.close) {
     fprintf(stderr, "[hdmirx] libasound.so.2 를 쓸 수 없음 - HDMI 음성 없음\n");
     if (lib) dlclose(lib);
@@ -79,6 +109,19 @@ void HdmiRxSource::AudioRun() {
         for (int i = 0; i < 10 && !stop_; i++) std::this_thread::sleep_for(std::chrono::milliseconds(100));
         continue;
       }
+      // ALSA timestamp 를 CLOCK_MONOTONIC(영상/muxer 와 같은 시계)으로 받도록 설정 (start 전에).
+      if (st_h) { a.st_free(st_h); st_h = nullptr; }
+      if (have_ts_api) {
+        void* sw = nullptr;
+        bool ok = false;
+        if (a.sw_malloc(&sw) == 0) {
+          ok = a.sw_current(pcm_h, sw) == 0 && a.sw_set_tstamp_mode(pcm_h, sw, 1 /*ENABLE*/) == 0 &&
+               a.sw_set_tstamp_type(pcm_h, sw, 1 /*MONOTONIC*/) == 0 && a.sw_params(pcm_h, sw) == 0;
+          a.sw_free(sw);
+        }
+        if (ok && a.st_malloc(&st_h) != 0) st_h = nullptr;
+        printf("[hdmirx] 음성 timestamp: %s\n", st_h ? "ALSA htstamp(monotonic)" : "설정 실패 - 지금 시각으로 대체");
+      }
       // 이 보드(rk_hdmirx)는 readi 의 자동 시작이 EIO 로 실패해서 명시적으로 start 해야 한다.
       if (a.start(pcm_h) < 0) {
         a.close(pcm_h);
@@ -98,9 +141,29 @@ void HdmiRxSource::AudioRun() {
       }
       continue;
     }
+    // 이번 블록 첫 샘플의 캡처 시각 = (status 시각) - (방금 읽은 n + 아직 안 읽은 avail 샘플) / 48k
+    int64_t ts_ns = 0;
+    if (st_h && a.status(pcm_h, st_h) == 0) {
+      timespec ht{};
+      a.st_get_htstamp(st_h, &ht);
+      if (ht.tv_sec || ht.tv_nsec) {
+        const int64_t end_ns = (int64_t)ht.tv_sec * 1000000000LL + ht.tv_nsec;
+        const int64_t cand = end_ns - (int64_t)(n + (long)a.st_get_avail(st_h)) * 1000000000LL / AudioMixer::kRate;
+        const int64_t age = now_ns() - cand;
+        if (age > -50000000LL && age < 1000000000LL) {   // 지금 기준 -50ms~1s 안이면 신뢰, 아니면 버림(지금 시각으로 대체)
+          ts_ns = cand;
+          age_sum += age / 1e6; age_max = std::max(age_max, age / 1e6); age_n++;
+        }
+      }
+    }
+    if (age_n >= 47) {   // 약 1초
+      printf("[hdmirx-ts] audio ts age avg=%.1fms max=%.1fms (n=%d)\n", age_sum / age_n, age_max, age_n);
+      age_sum = 0; age_max = 0; age_n = 0;
+    }
     for (long i = 0; i < n * 2; i++) pcm[i] = raw[i] / 32768.f;
-    audio_->PushLive(pcm.data(), (int)n);
+    audio_->PushLive(pcm.data(), (int)n, ts_ns);
   }
+  if (st_h) a.st_free(st_h);
   if (pcm_h) a.close(pcm_h);
   dlclose(lib);
 }
@@ -211,6 +274,10 @@ bool HdmiRxSource::Session(const std::string& dev) {
     signal_ = true;
     printf("[hdmirx] signal %dx%d %.2ffps %.4s stride=%d\n", w, h, fps, (const char*)&pf, stride);
     int idle = 0;
+    bool warned_ts = false;
+    int64_t last_ts = 0;
+    double age_sum = 0, age_max = 0, gap_max = 0;
+    int age_n = 0;
     while (!stop_) {
       pollfd p{fd, POLLIN | POLLPRI, 0};
       if (poll(&p, 1, 200) <= 0) {
@@ -233,6 +300,22 @@ bool HdmiRxSource::Session(const std::string& dev) {
         b.m.planes = pl;
         b.length = VIDEO_MAX_PLANES;
         if (Xioctl(fd, VIDIOC_DQBUF, &b) < 0) continue;
+        // 입력 timestamp(= PTS 원천): V4L2 버퍼 timestamp 가 MONOTONIC 이면 그대로(muxer/ALSA 와 같은 CLOCK_MONOTONIC), 아니면 지금 시각
+        const int64_t now_ns = (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        int64_t ts_ns = now_ns;
+        if ((b.flags & V4L2_BUF_FLAG_TIMESTAMP_MASK) == V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC && (b.timestamp.tv_sec || b.timestamp.tv_usec))
+          ts_ns = (int64_t)b.timestamp.tv_sec * 1000000000LL + (int64_t)b.timestamp.tv_usec * 1000LL;
+        else if (!warned_ts) { printf("[hdmirx] V4L2 timestamp 가 MONOTONIC 이 아님(flags=0x%x) - 도착 시각으로 대체\n", b.flags); warned_ts = true; }
+        {   // 1초 단위 진단: timestamp 가 지금보다 얼마나 과거인지, 프레임 간격
+          const double age = (now_ns - ts_ns) / 1e6;
+          const double gap = last_ts ? (ts_ns - last_ts) / 1e6 : 0;
+          last_ts = ts_ns;
+          age_sum += age; age_max = std::max(age_max, age); gap_max = std::max(gap_max, gap);
+          if (++age_n >= 60) {
+            printf("[hdmirx-ts] video ts age avg=%.1fms max=%.1fms frame_gap_max=%.1fms (n=%d)\n", age_sum / age_n, age_max, gap_max, age_n);
+            age_sum = 0; age_max = 0; gap_max = 0; age_n = 0;
+          }
+        }
         int old;
         {
           std::lock_guard<std::mutex> lk(mu_);   // 합성 중이면 끝날 때까지 대기
@@ -244,6 +327,7 @@ bool HdmiRxSource::Session(const std::string& dev) {
           cur_ref_.hor_stride = stride;
           cur_ref_.ver_stride = h;
           cur_ref_.format = fmt;
+          cur_ref_.ts_ns = ts_ns;
         }
         if (old >= 0) qbuf(old);   // 이전 프레임은 드라이버에 반환
       }

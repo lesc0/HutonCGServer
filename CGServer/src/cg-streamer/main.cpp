@@ -552,6 +552,7 @@ static void EncodeLoop(CefRefPtr<Client> client) {
   auto next = clk::now();
 #endif
   uint64_t frames = 0, bytes = 0, last_paints = 0, converted_seq = 0, uploaded_seq = 0, underflows = 0, missed = 0;
+  int64_t last_live_ts = 0;     // 직전에 PTS 로 쓴 V4L2 timestamp (같은 프레임을 다시 쓰는 틱 구분용)
   const bool jitter_buf = g_sync && g_paint_fps == g_fps;   // --paint-fps 가 60 미만이면 최신 그림 방식
   UiFrame cur;                  // 현재 출력 중인 UI 그림 (EncodeLoop 소유)
   bool primed = false;
@@ -572,6 +573,7 @@ static void EncodeLoop(CefRefPtr<Client> client) {
     // TODO(정책 4): 밀린 틱(expirations-1)을 따라잡는 처리는 정책서 미결정 3(따라잡기 틱에 쓸 입력) 확정 후 구현.
     // 지금은 한 번만 처리하고 밀린 횟수만 센다(이전 sleep 방식과 같은 동작).
     if (expirations > 1) missed += expirations - 1;
+    const int64_t tick_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(clk::now().time_since_epoch()).count();
 #ifdef CG_EBF
     const auto tick_now = clk::now();
     if (tick_now >= next_paint) {
@@ -620,6 +622,8 @@ static void EncodeLoop(CefRefPtr<Client> client) {
     }
 
     const bool hdmi = g_hdmi.Active();
+    // 이번 프레임의 PTS 원천(CLOCK_MONOTONIC ns). 라이브(HDMI RX)는 V4L2 버퍼 timestamp, 그 외(CG 만 / 같은 입력을 다시 쓰는 틱)는 틱 시각.
+    int64_t src_ts = tick_ns;
     if (g_paint_mode == PaintMode::kSoftware && (g_video.Active() || hdmi)) {
       // 영상 합성: UI 는 바뀔 때만 dmabuf 로 올리고, 매 프레임 영상+UI 를 RGA 로 합성
       if (cur.seq && cur.seq != uploaded_seq) {
@@ -633,6 +637,7 @@ static void EncodeLoop(CefRefPtr<Client> client) {
       }
       VideoFrameRef vf;   // HDMI 신호가 없으면 영상 자리는 검정 (UI 는 그대로)
       const bool have = hdmi ? g_hdmi.Acquire(vf) : g_video.Acquire(vf);
+      if (have && hdmi && vf.ts_ns > 0 && vf.ts_ns != last_live_ts) { src_ts = vf.ts_ns; last_live_ts = vf.ts_ns; }
       const bool ok = g_encoder.Compose(have ? &vf : nullptr, rc[0], rc[1], rc[2], rc[3]);
       if (have) hdmi ? g_hdmi.Release() : g_video.Release();
       converted_seq = 0;                          // 영상이 끝나면 UI 단독 변환을 다시 하도록
@@ -644,7 +649,7 @@ static void EncodeLoop(CefRefPtr<Client> client) {
         converted_seq = cur.seq;
       }
     }                               // kAccel: 변환은 OnAcceleratedPaint 에서 이미 수행됨
-    if (!g_encoder.Encode([&](const uint8_t* d, size_t n) { mux.Write(d, n); bytes += n; }))
+    if (!g_encoder.Encode([&](const uint8_t* d, size_t n) { mux.Write(d, n, src_ts); bytes += n; }))
       continue;                     // 아직 프레임 없음
     frames++;
     { std::lock_guard<std::mutex> lk(g_pv_mu); g_pv_seq++; }

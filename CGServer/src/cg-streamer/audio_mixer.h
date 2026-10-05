@@ -25,7 +25,8 @@ class AudioMixer {
   // 너무 먼 미래(>3초)면 false.
   bool PushAt(const float* pcm, int n, clk::time_point due);
   // 라이브 입력(HDMI): 약간의 지연(kLiveLatency)을 두고 이어 붙인다. 어긋나면 재동기.
-  void PushLive(const float* pcm, int n);
+  // ts_ns: 첫 샘플의 캡처 timestamp(CLOCK_MONOTONIC ns, ALSA). 있으면 그 시각 기준으로 배치(PTS = 캡처 시각 + kLiveLatency). 0 이면 지금 시각.
+  void PushLive(const float* pcm, int n, int64_t ts_ns = 0);
   void Clear();   // 아직 재생되지 않은 음성 폐기 (영상 정지/교체 시)
 
   // 로컬 재생: 송출(AAC)과 같은 믹스를 이 ALSA 장치로도 내보낸다(예: "plughw:CARD=rockchiphdmi1,DEV=0"). 비면 안 함. Start() 전에 지정.

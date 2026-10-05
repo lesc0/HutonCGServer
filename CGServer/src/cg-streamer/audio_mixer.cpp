@@ -65,11 +65,19 @@ bool AudioMixer::PushAt(const float* pcm, int n, clk::time_point due) {
   return true;
 }
 
-void AudioMixer::PushLive(const float* pcm, int n) {
+void AudioMixer::PushLive(const float* pcm, int n, int64_t ts_ns) {
   if (!running_) return;
   std::lock_guard<std::mutex> lk(mu_);
-  const int64_t target = NowIdx() + (int64_t)(kLiveLatency * kRate);
-  if (live_pos_ < 0 || std::llabs(live_pos_ - target) > kRate / 10) live_pos_ = target;   // 100ms 넘게 어긋나면 재동기
+  int64_t target, tol;
+  if (ts_ns > 0) {   // ALSA timestamp 기준: 캡처 시각이 곧 PTS (+ 고정 지연)
+    const int64_t t0_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t0_.time_since_epoch()).count();
+    target = (int64_t)std::llround((double)(ts_ns - t0_ns) * kRate / 1e9) + (int64_t)(kLiveLatency * kRate);
+    tol = kRate / 100;   // 10ms: timestamp 지터는 이어 붙여 흡수, 클럭 드리프트는 재동기
+  } else {
+    target = NowIdx() + (int64_t)(kLiveLatency * kRate);
+    tol = kRate / 10;
+  }
+  if (live_pos_ < 0 || std::llabs(live_pos_ - target) > tol) live_pos_ = target;   // 어긋나면 재동기
   Mix(pcm, n, live_pos_);
   live_pos_ += n;
 }
