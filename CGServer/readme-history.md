@@ -136,7 +136,16 @@ lagged_frames += count - 1;  vframe_info.count = count;
 #### 결과
 - 생활정보 `paint` 평균 **34 → 59.7/s**(`under` 초당 15 → 25초에 약 10, `late25` 초당 13~22 → 2~6). 송출 영상의 크롤은 이동 프레임 대부분이 일정하게 5px(이론 4.66)씩 이동하고, 고립 정지 프레임은 약 0.8%(40초에 18개, 약 2초에 1번). 사용자 확인: 좋아졌으나 "가끔 툭툭"은 남음.
 
-### 8) 개발 보조
+### 8) 인코더 fps 를 분수로 (29.97 / 30 / 59.94 / 60)
+
+- 배경: CEF 의 `windowless_frame_rate` 는 `int`(1~60, `cef_types.h`)라 59.94 를 줄 수 없다. 그래서 **인코더 쪽만** 분수로 받고 CEF 는 정수 근사(30/60)를 쓴다.
+- `cgsetup.cfg` 의 `fps=` 를 `ParseFps` 로 분수로 변환(정수 N/1, NTSC 계열 N×1000/1001, 그 밖의 소수 ×1000/1000). `g_fps_num/g_fps_den`(정확한 값)과 `g_fps`(반올림, CEF 페인트·통계 주기·지터 버퍼 조건용)를 분리.
+- 적용: MPP rate control `rc:fps_in/out_num/denorm`(GOP 는 반올림 fps), `TsMuxer::Open(fps_num, fps_den)`(`avg_frame_rate`, 패킷 duration), `EncodeLoop` 틱 주기 `1e9 × den / num` ns. 영상 PTS 는 입력 timestamp 그대로라 계산식 변화 없음.
+- 단말 확인(임시 cfg, 15초 캡처): `59.94` → 스트림 `60000/1001`, 실측 59.940fps(901프레임/15.015초), PTS 간격 1501/1502 교대(이상값 1501.5). `29.97` → `30000/1001`, 실측 29.970fps(450프레임/14.982초), PTS 간격 3003 중심.
+- 시행착오: 빌드 중 오류 메시지 문자열을 생성 스크립트의 `chr(92)` 로 만들다가 C++ 소스에 그대로 들어가 컴파일 실패 → 수정. `bin/cgsetup.cfg` 는 단말에 로컬 수정이 있어 주석은 건드리지 않고 `readme-dev.md` 에 설명.
+- 미확인: 라이브 HDMI 입력(59.94 입력)에서 설정을 59.94 로 맞췄을 때 프레임 반복·건너뜀이 줄어드는지.
+
+### 9) 개발 보조
 
 - 단말 SSH 공개키 등록: `bin/setup-ssh-key.ps1`(Windows PowerShell, 키 생성/등록/접속 확인). 한글이 깨지지 않도록 UTF-8 **BOM** 으로 저장. `bin/*` 가 gitignore 라 저장소에는 올라가지 않는다(올리려면 `.gitignore` 에 예외 추가).
 - 임시로 PC 로 UDP 송출: `CG_UDP=<ip>:1234 bin/start.sh`. PC 에서 `UdpClient(1234)` 로 받아 TS 동기 바이트(0x47)와 `ffprobe -show_entries packet=pts` 로 PTS 를 확인했다.
