@@ -14,7 +14,7 @@ class TsMuxer {
  public:
   ~TsMuxer() { Close(); }
   // url 예: "udp://239.1.1.1:1234?pkt_size=1316", "udp://192.168.0.10:5000?pkt_size=1316", "out.ts"
-  bool Open(const std::string& url, int width, int height, int fps);
+  bool Open(const std::string& url, int width, int height, int fps_num, int fps_den);   // fps = fps_num/fps_den
   // 패킷 1개 = 프레임 1개. src_ts_ns: 그 프레임의 입력 timestamp(CLOCK_MONOTONIC ns, 라이브는 V4L2 timestamp).
   // PTS 는 프레임 번호가 아니라 이 timestamp 를 90kHz 로 환산만 한 값이다(기준점 빼기·보정 없음). 0 이면 지금 시각.
   bool Write(const uint8_t* annexb, size_t len, int64_t src_ts_ns = 0);
@@ -29,7 +29,7 @@ class TsMuxer {
  private:
   AVFormatContext* fc_ = nullptr;
   AVStream* st_ = nullptr;
-  int fps_ = 60;
+  int fps_num_ = 60, fps_den_ = 1;
   bool header_ = false;
   bool warned_ = false;
 

@@ -12,7 +12,7 @@
 #include <chrono>
 #include <cstring>
 
-bool MppH264Encoder::Init(int width, int height, int fps, int bitrate_bps) {
+bool MppH264Encoder::Init(int width, int height, int fps_num, int fps_den, int bitrate_bps) {
   w_ = width;
   h_ = height;
   hor_ = (w_ + 15) & ~15;  // 16 정렬 stride (1080 -> 1088)
@@ -50,12 +50,12 @@ bool MppH264Encoder::Init(int width, int height, int fps, int bitrate_bps) {
 
   mpp_enc_cfg_set_s32(cfg_, "rc:mode", MPP_ENC_RC_MODE_CBR);
   mpp_enc_cfg_set_s32(cfg_, "rc:fps_in_flex", 0);
-  mpp_enc_cfg_set_s32(cfg_, "rc:fps_in_num", fps);  // cgsetup.cfg: fps=... 로 조정
-  mpp_enc_cfg_set_s32(cfg_, "rc:fps_in_denorm", 1);
+  mpp_enc_cfg_set_s32(cfg_, "rc:fps_in_num", fps_num);  // cgsetup.cfg: fps=... 로 조정
+  mpp_enc_cfg_set_s32(cfg_, "rc:fps_in_denorm", fps_den);
   mpp_enc_cfg_set_s32(cfg_, "rc:fps_out_flex", 0);
-  mpp_enc_cfg_set_s32(cfg_, "rc:fps_out_num", fps);
-  mpp_enc_cfg_set_s32(cfg_, "rc:fps_out_denorm", 1);
-  mpp_enc_cfg_set_s32(cfg_, "rc:gop", fps);  // IDR 1초 간격
+  mpp_enc_cfg_set_s32(cfg_, "rc:fps_out_num", fps_num);
+  mpp_enc_cfg_set_s32(cfg_, "rc:fps_out_denorm", fps_den);
+  mpp_enc_cfg_set_s32(cfg_, "rc:gop", (fps_num + fps_den / 2) / fps_den);  // IDR 1초 간격(반올림한 fps)
   mpp_enc_cfg_set_s32(cfg_, "rc:bps_target", bitrate_bps);
   mpp_enc_cfg_set_s32(cfg_, "rc:bps_max", bitrate_bps * 17 / 16);
   mpp_enc_cfg_set_s32(cfg_, "rc:bps_min", bitrate_bps * 15 / 16);

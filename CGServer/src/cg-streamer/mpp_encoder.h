@@ -15,7 +15,7 @@ class MppH264Encoder {
   using PacketCb = std::function<void(const uint8_t* data, size_t len)>;
 
   ~MppH264Encoder() { Deinit(); }
-  bool Init(int width, int height, int fps, int bitrate_bps);
+  bool Init(int width, int height, int fps_num, int fps_den, int bitrate_bps);   // fps = fps_num/fps_den (예: 60000/1001)
 
   // 입력 1) CPU 버퍼(OnPaint): BGRA 1920x1080 연속 메모리
   bool Convert(const uint8_t* bgra);

@@ -49,6 +49,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cctype>
+#include <cmath>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -90,7 +91,19 @@
 extern char** environ;
 
 static constexpr int kW = 1920, kH = 1080;
-static int g_fps = 60;   // cgsetup.cfg: fps=... (인코더 rc/EncodeLoop 틱/기본 페인트 fps 공통)
+static int g_fps = 60;   // 정수 근사 fps: CEF 페인트 fps 기본값·통계 주기·GOP 의 기준 (29.97 -> 30, 59.94 -> 60)
+static int g_fps_num = 60, g_fps_den = 1;   // 인코더(rc)/muxer/EncodeLoop 틱의 정확한 fps. cgsetup.cfg: fps=29.97 | 30 | 59.94 | 60
+// fps 문자열 -> 분수. 정수는 N/1, NTSC 계열(23.976/29.97/59.94)은 N*1000/1001, 그 밖의 소수는 *1000/1000.
+static bool ParseFps(const std::string& v, int& num, int& den) {
+  const double d = atof(v.c_str());
+  if (!(d >= 1 && d <= 240)) return false;
+  const double r = std::round(d);
+  if (std::fabs(d - r) < 0.005) { num = (int)r; den = 1; return true; }
+  const double n = std::round(d * 1.001);
+  if (std::fabs(n * 1000.0 / 1001.0 - d) < 0.005) { num = (int)n * 1000; den = 1001; return true; }
+  num = (int)std::lround(d * 1000); den = 1000;
+  return true;
+}
 static constexpr int kBitrate = 8 * 1000 * 1000;
 static constexpr int kCtlPort = 5555;
 
@@ -253,7 +266,11 @@ static void LoadSetupCfg(const std::string& path) {
     else if (k == "audio_out") g_audio_out = v;
     else if (k == "output_display") g_output_display = v;
     else if (k == "realtime") g_rt_enabled = (v == "on" || v == "1" || v == "true");
-    else if (k == "fps") g_fps = std::max(1, atoi(v.c_str()));
+    else if (k == "fps") {
+      int n, d;
+      if (ParseFps(v, n, d)) { g_fps_num = n; g_fps_den = d; g_fps = std::max(1, (int)std::lround((double)n / d)); }
+      else fprintf(stderr, "[cfg] fps=%s 를 해석할 수 없음(1~240) - 기본값 유지"+chr(92)+"n", v.c_str());
+    }
   }
 }
 
@@ -561,14 +578,14 @@ class WinDelegate : public CefWindowDelegate {
 static void EncodeLoop(CefRefPtr<Client> client) {
   pthread_setname_np(pthread_self(), "cg-encode");
   SetRealtime("cg-encode", 50);
-  if (!g_encoder.Init(kW, kH, g_fps, kBitrate)) { g_quit = true; return; }
+  if (!g_encoder.Init(kW, kH, g_fps_num, g_fps_den, kBitrate)) { g_quit = true; return; }
   g_enc_ok = true;
   TsMuxer mux;
-  if (!mux.Open(g_out, kW, kH, g_fps)) { g_quit = true; return; }
+  if (!mux.Open(g_out, kW, kH, g_fps_num, g_fps_den)) { g_quit = true; return; }
   g_audio.Start(&mux);
 
   using clk = std::chrono::steady_clock;
-  const auto period = std::chrono::nanoseconds(1000000000LL / g_fps);
+  const auto period = std::chrono::nanoseconds(1000000000LL * g_fps_den / g_fps_num);   // 59.94 -> 16.683ms
   // fps 틱: timerfd(CLOCK_MONOTONIC). 첫 만료는 period 뒤, 이후 period 간격의 절대 격자로 만료된다.
   const int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
   if (tfd < 0) { perror("timerfd_create"); g_quit = true; return; }
@@ -1521,10 +1538,10 @@ int main(int argc, char* argv[]) {
 #ifdef CG_EBF
     if (!g_view) printf("[cg] frame clock: external begin frame (%dfps, UI-thread requests)\n", g_paint_fps);
 #endif
-    printf("[cg] run: project=%s out=%s paint=%s paint_fps=%d sync=%s (제어: HTTP %s:%d%s, UDP %d next|prev|goto N|quit)\n",
+    printf("[cg] run: project=%s out=%s paint=%s paint_fps=%d fps=%.5g sync=%s (제어: HTTP %s:%d%s, UDP %d next|prev|goto N|quit)\n",
            g_project.c_str(), g_out.c_str(),
            g_view ? "view" : g_paint_mode == PaintMode::kAccel ? "accel" : g_gpu_composite ? "software+gpu" : "software",
-           g_paint_fps, g_sync && g_paint_fps == g_fps ? "jitter-buffer(5)" : "latest", g_http_bind.c_str(), g_http_port,
+           g_paint_fps, (double)g_fps_num / g_fps_den, g_sync && g_paint_fps == g_fps ? "jitter-buffer(5)" : "latest", g_http_bind.c_str(), g_http_port,
            g_http_token.empty() ? "" : " (token)", kCtlPort);
   } else {
     // ===== [EDIT MODE] =====

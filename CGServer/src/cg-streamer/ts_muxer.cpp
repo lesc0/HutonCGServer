@@ -30,8 +30,9 @@ static bool IsIdr(const uint8_t* p, size_t n) {
   return false;
 }
 
-bool TsMuxer::Open(const std::string& url, int w, int h, int fps) {
-  fps_ = fps;
+bool TsMuxer::Open(const std::string& url, int w, int h, int fps_num, int fps_den) {
+  fps_num_ = fps_num;
+  fps_den_ = fps_den;
   avformat_network_init();
 
   int r = avformat_alloc_output_context2(&fc_, nullptr, "mpegts", url.c_str());
@@ -47,7 +48,7 @@ bool TsMuxer::Open(const std::string& url, int w, int h, int fps) {
   cp->height = h;
   cp->video_delay = 0;                 // B-프레임 없음(MPP CBR)
   st_->time_base = AVRational{1, 90000};
-  st_->avg_frame_rate = AVRational{fps, 1};
+  st_->avg_frame_rate = AVRational{fps_num, fps_den};
 
   // 음성: AAC-LC (libavcodec 내장 aac 인코더). 인코더를 먼저 열어 extradata(ADTS 용)를 스트림에 복사한다.
   const AVCodec* ac = avcodec_find_encoder(AV_CODEC_ID_AAC);
@@ -100,7 +101,7 @@ bool TsMuxer::Write(const uint8_t* d, size_t len, int64_t src_ts_ns) {
   memcpy(pkt->data, d, len);
 
   pkt->stream_index = st_->index;
-  pkt->duration = av_rescale_q(1, AVRational{1, fps_}, st_->time_base);
+  pkt->duration = av_rescale_q(1, AVRational{fps_den_, fps_num_}, st_->time_base);
   if (IsIdr(d, len)) pkt->flags |= AV_PKT_FLAG_KEY;
 
   if (src_ts_ns <= 0)   // 입력 timestamp 가 없으면 지금 시각
