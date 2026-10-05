@@ -86,7 +86,7 @@ input:disabled,textarea:disabled{background:#0a0d15;color:#55617c}
 /* Attributes: Name/문자 입력 칸 폭을 고정으로 줄임(나머지 블록이 남는 폭을 나눠 가짐) */
 .textproperties{flex:0 0 250px;min-width:0}
 .fontproperties{flex:0 0 300px;min-width:0}
-.fontproperties{flex:0 0 250px}.textproperties{flex:0 0 196px}   /* 가운데(Name/자막 내용) 칸 폭 239->140px 로 줄였다가 140->200px 로 늘린 뒤 2px 씩 두 번 줄여 196px. 안내 문구는 줄바꿈 */
+.fontproperties{flex:0 0 250px}.textproperties{flex:0 0 194px}   /* 가운데(Name/자막 내용) 칸 폭 239->140px 로 줄였다가 140->200px 로 늘린 뒤 2px 씩 세 번 줄여 194px. 안내 문구는 줄바꿈 */
 
 /* 속성 칸: 라벨(예: 시작 오프셋)은 줄바꿈하지 않고, 입력 칸이 남는 폭에 맞춰 줄어듦(최대 57px) */
 .propertygrid .num{white-space:nowrap}
