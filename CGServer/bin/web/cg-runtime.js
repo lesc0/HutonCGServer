@@ -34,7 +34,17 @@ const ITEM_DEFAULTS = {
 const PAGE_OPTION_KEYS = ['direction', 'effectPreset', 'tileX', 'tileY', 'softness', 'effectBorder', 'curlRadius',
   'effectAngle', 'blinkCount', 'speed'];
 
-const fixItem = (i) => Object.assign({}, ITEM_DEFAULTS, i);
+// 윈도우 전용 글꼴(맑은 고딕·Arial 등)은 단말에 없으므로 예전 프로젝트의 글꼴 이름을 지금 있는 무료 글꼴로 바꾼다(model.ts LEGACY_FONTS 와 같게 유지).
+const LEGACY_FONTS = { '맑은 고딕': 'NotoSansKR', 'Malgun Gothic': 'NotoSansKR', Arial: 'NotoSansKR', Helvetica: 'NotoSansKR', 'Arial Black': 'NotoSansKR-Black',
+  '돋움': 'NanumGothic', Dotum: 'NanumGothic', '바탕': 'NanumMyeongjo', Batang: 'NanumMyeongjo', '궁서': 'NanumMyeongjo', Gungsuh: 'NanumMyeongjo',
+  Georgia: 'NanumMyeongjo', 'Times New Roman': 'NanumMyeongjo' };
+const modernFont = (f) => (Object.prototype.hasOwnProperty.call(LEGACY_FONTS, f) ? LEGACY_FONTS[f] : f);
+const fixItem = (i) => {
+  const o = Object.assign({}, ITEM_DEFAULTS, i);
+  o.family = modernFont(o.family);
+  if (Array.isArray(o.runs)) o.runs = o.runs.map((r) => (r && typeof r.family === 'string' ? Object.assign({}, r, { family: modernFont(r.family) }) : r));
+  return o;
+};
 function fixPage(p) {
   return Object.assign({
     bg: 'transparent', items: [], duration: 30, mode: 'Still', effect: 'none', outEffect: 'none',
