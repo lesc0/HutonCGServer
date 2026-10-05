@@ -269,7 +269,7 @@ static void LoadSetupCfg(const std::string& path) {
     else if (k == "fps") {
       int n, d;
       if (ParseFps(v, n, d)) { g_fps_num = n; g_fps_den = d; g_fps = std::max(1, (int)std::lround((double)n / d)); }
-      else fprintf(stderr, "[cfg] fps=%s 를 해석할 수 없음(1~240) - 기본값 유지"+chr(92)+"n", v.c_str());
+      else fprintf(stderr, "[cfg] fps=%s 를 해석할 수 없음(1~240) - 기본값 유지\n", v.c_str());
     }
   }
 }
