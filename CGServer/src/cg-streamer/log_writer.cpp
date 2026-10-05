@@ -15,7 +15,7 @@
 namespace {
 
 std::string DateStr(const tm& t) {
-  char b[16];
+  char b[64];
   snprintf(b, sizeof b, "%04d-%02d-%02d", t.tm_year + 1900, t.tm_mon + 1, t.tm_mday);
   return b;
 }
