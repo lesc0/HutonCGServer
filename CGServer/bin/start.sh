@@ -61,10 +61,10 @@ if pgrep -f "cg-streamer --run" >/dev/null; then
   echo "  이미 실행 중"
 else
   nohup ./cg-streamer --run --project="project/${PROJECT:-.none}.json" ${CG_UDP:+--udp="$CG_UDP"} "${CEF_GFX_ARGS[@]}" --autoplay \
-    > log/cg-streamer.log 2>&1 &
+    > log/cg-streamer.out 2>&1 &   # 정상 로그는 cg-streamer 가 직접 log/cg-streamer-YYYY-MM-DD.log 에 남김. .out 은 시작 직후 실패 등 그 이전 출력용
   disown
   sleep 2
-  pgrep -f "cg-streamer --run" >/dev/null && echo "  시작됨" || echo "  시작 실패 (log/cg-streamer.log 확인)"
+  pgrep -f "cg-streamer --run" >/dev/null && echo "  시작됨" || echo "  시작 실패 (log/cg-streamer.out, log/cg-streamer-날짜.log 확인)"
 fi
 fi
 

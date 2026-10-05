@@ -45,7 +45,8 @@ add_executable(cg_streamer
   audio_mixer.cpp
   video_source.cpp
   hdmirx_source.cpp
-  cef_dumper.cpp)
+  cef_dumper.cpp
+  log_writer.cpp)
 option(ENABLE_ACCEL_PAINT "OnAcceleratedPaint(dmabuf) 실험 경로 (--accel)" OFF)
 if(ENABLE_ACCEL_PAINT)
   target_compile_definitions(cg_streamer PRIVATE CG_ACCEL=1)

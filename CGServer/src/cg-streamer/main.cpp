@@ -71,6 +71,7 @@
 #include "audio_mixer.h"
 #include "rt.h"
 #include "cef_dumper.h"
+#include "log_writer.h"
 #include "drm_out.h"   // CG_DRM_OUT 빌드에서만 내용이 있음
 
 // X11 은 CEF 헤더 뒤에 포함(Success/None 등 매크로가 CEF의 동명 심볼과 충돌).
@@ -1326,6 +1327,12 @@ int main(int argc, char* argv[]) {
     if (!strcmp(argv[i], "--run")) g_app_mode = AppMode::kRun;
   int code = CefExecuteProcess(main_args, app, nullptr);
   if (code >= 0) return code;
+
+  if (g_app_mode == AppMode::kRun) {   // 이후 모든 printf/stderr(CEF 자식 포함)를 시간 붙여 일별 파일(log/cg-streamer-YYYY-MM-DD.log)로
+    std::error_code ec;
+    const auto exe_dir = std::filesystem::read_symlink("/proc/self/exe", ec).parent_path();
+    LogWriterStart((ec ? std::filesystem::path(".") : exe_dir) / "log", "cg-streamer", 30);
+  }
 
   for (int i = 1; i < argc; i++)
     if (!strncmp(argv[i], "--setup=", 8)) g_setup_cfg = argv[i] + 8;
