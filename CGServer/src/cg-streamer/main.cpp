@@ -572,8 +572,8 @@ static void EncodeLoop(CefRefPtr<Client> client) {
     // TODO(정책 4): 밀린 틱(expirations-1)을 따라잡는 처리는 정책서 미결정 3(따라잡기 틱에 쓸 입력) 확정 후 구현.
     // 지금은 한 번만 처리하고 밀린 횟수만 센다(이전 sleep 방식과 같은 동작).
     if (expirations > 1) missed += expirations - 1;
-    const auto tick_now = clk::now();
 #ifdef CG_EBF
+    const auto tick_now = clk::now();
     if (tick_now >= next_paint) {
       client->RequestBeginFrame();
       do { next_paint += paint_period; } while (next_paint <= tick_now);
