@@ -897,7 +897,7 @@ static bool XOutputGeom(Display* dpy, Window root, const std::string& name, int&
       }
     }
     if (clk::now() - stat_t0 >= std::chrono::seconds(1)) {
-      printf("[pstat] drawn=%llu/s skipped(X못따라옴)=%llu/s draw_gap_max=%.0fms\n",
+      printf("[pstat] drawn=%llu/s skipped_x=%llu/s draw_gap_max=%.0fms\n",
              (unsigned long long)drawn, (unsigned long long)skipped_pending, draw_gap_max_ms);
       drawn = 0; skipped_pending = 0; draw_gap_max_ms = 0; stat_t0 = clk::now();
     }
