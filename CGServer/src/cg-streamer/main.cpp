@@ -37,6 +37,7 @@
 #include <spawn.h>
 #include <sys/file.h>
 #include <sys/socket.h>
+#include <sys/timerfd.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -47,6 +48,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -537,8 +539,19 @@ static void EncodeLoop(CefRefPtr<Client> client) {
 
   using clk = std::chrono::steady_clock;
   const auto period = std::chrono::nanoseconds(1000000000LL / g_fps);
+  // fps 틱: timerfd(CLOCK_MONOTONIC). 첫 만료는 period 뒤, 이후 period 간격의 절대 격자로 만료된다.
+  const int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+  if (tfd < 0) { perror("timerfd_create"); g_quit = true; return; }
+  {
+    itimerspec its{};
+    its.it_interval.tv_sec = its.it_value.tv_sec = (time_t)(period.count() / 1000000000LL);
+    its.it_interval.tv_nsec = its.it_value.tv_nsec = (long)(period.count() % 1000000000LL);
+    if (timerfd_settime(tfd, 0, &its, nullptr) != 0) { perror("timerfd_settime"); close(tfd); g_quit = true; return; }
+  }
+#ifdef CG_EBF
   auto next = clk::now();
-  uint64_t frames = 0, bytes = 0, last_paints = 0, converted_seq = 0, uploaded_seq = 0, underflows = 0;
+#endif
+  uint64_t frames = 0, bytes = 0, last_paints = 0, converted_seq = 0, uploaded_seq = 0, underflows = 0, missed = 0;
   const bool jitter_buf = g_sync && g_paint_fps == g_fps;   // --paint-fps 가 60 미만이면 최신 그림 방식
   UiFrame cur;                  // 현재 출력 중인 UI 그림 (EncodeLoop 소유)
   bool primed = false;
@@ -550,11 +563,16 @@ static void EncodeLoop(CefRefPtr<Client> client) {
 #endif
 
   while (!g_quit) {
-    next += period;
-    std::this_thread::sleep_until(next);
-    // 긴 처리 지연 뒤에 지난 틱을 몰아서 실행하지 않는다.
+    uint64_t expirations = 0;     // 마지막 read 이후 만료 횟수. 1 보다 크면 그만큼 틱이 밀린 것
+    const ssize_t rn = read(tfd, &expirations, sizeof expirations);
+    if (rn != (ssize_t)sizeof expirations) {
+      if (rn < 0 && errno == EINTR) continue;
+      perror("timerfd read"); break;
+    }
+    // TODO(정책 4): 밀린 틱(expirations-1)을 따라잡는 처리는 정책서 미결정 3(따라잡기 틱에 쓸 입력) 확정 후 구현.
+    // 지금은 한 번만 처리하고 밀린 횟수만 센다(이전 sleep 방식과 같은 동작).
+    if (expirations > 1) missed += expirations - 1;
     const auto tick_now = clk::now();
-    if (tick_now - next >= period) next = tick_now;
 #ifdef CG_EBF
     if (tick_now >= next_paint) {
       client->RequestBeginFrame();
@@ -642,16 +660,17 @@ static void EncodeLoop(CefRefPtr<Client> client) {
         ql = g_store.q.size();
         dropped = g_store.dropped;
       }
-      printf("[stat] enc=%.1ffps paint=%llu/s gap_max=%.0fms late25=%u big100=%u out=%.2fMbps rga=%.1fms video=%s uiq=%zu under=%llu drop=%llu accel_fail=%llu\n",
+      printf("[stat] enc=%.1ffps paint=%llu/s gap_max=%.0fms late25=%u big100=%u out=%.2fMbps rga=%.1fms video=%s uiq=%zu under=%llu drop=%llu miss=%llu accel_fail=%llu\n",
              frames / sec, (unsigned long long)(p - last_paints), g_gap_max_us.exchange(0) / 1000.0, g_gap_late.exchange(0),
              g_gap_big.exchange(0), bytes * 8.0 / sec / 1e6, g_encoder.TakeComposeMs(),
              g_hdmi.Active() ? (g_hdmi.HasSignal() ? "hdmirx" : "hdmirx(no-signal)")
                              : g_video.Active() ? "on" : "off", ql, (unsigned long long)underflows,
-             (unsigned long long)dropped, (unsigned long long)g_accel_fail.load());
+             (unsigned long long)dropped, (unsigned long long)missed, (unsigned long long)g_accel_fail.load());
       last_paints = p;
       frames = 0; bytes = 0; t0 = clk::now();
     }
   }
+  close(tfd);
   g_enc_ok = false;
   g_audio.Stop();
   mux.Close();
