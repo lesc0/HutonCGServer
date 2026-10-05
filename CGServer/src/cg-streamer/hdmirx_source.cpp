@@ -154,7 +154,8 @@ void HdmiRxSource::AudioRun() {
       age_sum = 0; age_max = 0; age_n = 0;
     }
     for (long i = 0; i < n * 2; i++) pcm[i] = raw[i] / 32768.f;
-    audio_->PushLive(pcm.data(), (int)n, ts_ns);
+    audio_->PushLive(pcm.data(), (int)n, ts_ns);          // 믹서(로컬 재생용)
+    audio_->WriteLiveDirect(pcm.data(), (int)n, ts_ns);   // 송출: ALSA tstamp 를 PTS 로 mux 에 직접
   }
   if (st_h) a.st_free(st_h);
   if (pcm_h) a.close(pcm_h);

@@ -118,12 +118,15 @@ bool TsMuxer::Write(const uint8_t* d, size_t len, int64_t src_ts_ns) {
 }
 
 bool TsMuxer::WriteAudio(const float* pcm, std::chrono::steady_clock::time_point block_start) {
+  return WriteAudioNs(pcm, std::chrono::duration_cast<std::chrono::nanoseconds>(block_start.time_since_epoch()).count());
+}
+
+bool TsMuxer::WriteAudioNs(const float* pcm, int64_t pts_ns) {
   std::lock_guard<std::mutex> lk(mu_);
   if (!fc_ || !header_ || !aenc_) return false;
 
-  // PTS = 블록 첫 샘플 시각(ns)을 환산만 한다 (영상과 같은 CLOCK_MONOTONIC, 기준점 빼기·보정 없음). 인코더 time_base(1/48000)로 넘기면 mux 에서 90kHz 로 바뀜
-  const int64_t pts = av_rescale_q(std::chrono::duration_cast<std::chrono::nanoseconds>(block_start.time_since_epoch()).count(),
-                                   AVRational{1, 1000000000}, aenc_->time_base);
+  // PTS = timestamp(ns)를 환산만 한다 (영상과 같은 CLOCK_MONOTONIC, 기준점 빼기·보정 없음). 인코더 time_base(1/48000)로 넘기면 mux 에서 90kHz 로 바뀜
+  const int64_t pts = av_rescale_q(pts_ns, AVRational{1, 1000000000}, aenc_->time_base);
 
   AVFrame* f = av_frame_alloc();
   f->nb_samples = kAudioFrame;

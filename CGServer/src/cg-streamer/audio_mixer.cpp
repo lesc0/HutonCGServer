@@ -21,6 +21,8 @@ void AudioMixer::Start(TsMuxer* mux) {
   t0_ = clk::now();
   pos_ = 0;
   live_pos_ = -1;
+  ld_buf_.clear();
+  ld_until_ns_ = 0;
   std::fill(ring_.begin(), ring_.end(), 0.f);
   running_ = true;
   th_ = std::thread(&AudioMixer::Run, this);
@@ -82,6 +84,18 @@ void AudioMixer::PushLive(const float* pcm, int n, int64_t ts_ns) {
   live_pos_ += n;
 }
 
+void AudioMixer::WriteLiveDirect(const float* pcm, int n, int64_t ts_ns) {
+  if (!running_ || !mux_ || ts_ns <= 0) return;   // timestamp 가 없으면 직접 송출하지 않고 믹서 경로를 쓴다
+  const int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(clk::now().time_since_epoch()).count();
+  if (now > ld_until_ns_.load()) ld_buf_.clear();   // 끊겼다 다시 시작: 오래된 조각은 버림
+  ld_until_ns_ = now + 300000000LL;
+  ld_buf_.insert(ld_buf_.end(), pcm, pcm + (size_t)n * 2);
+  while (ld_buf_.size() >= (size_t)kBlock * 2) {
+    mux_->WriteAudioNs(ld_buf_.data(), ts_ns);   // 블록 PTS = 이 블록을 채운 읽기의 ALSA tstamp 그대로
+    ld_buf_.erase(ld_buf_.begin(), ld_buf_.begin() + (size_t)kBlock * 2);
+  }
+}
+
 void AudioMixer::Clear() {
   std::lock_guard<std::mutex> lk(mu_);
   for (int64_t i = 0; i < kCap; i++) {   // 현재 위치 이후 전부 비움
@@ -112,7 +126,8 @@ void AudioMixer::Run() {
       }
       pos_ += kBlock;
     }
-    mux_->WriteAudio(blk.data(), start);
+    if (std::chrono::duration_cast<std::chrono::nanoseconds>(clk::now().time_since_epoch()).count() > ld_until_ns_.load())
+      mux_->WriteAudio(blk.data(), start);   // 라이브 음성이 직접 송출 중이면 건너뜀 (같은 AAC 인코더에 두 시간축이 섞이지 않게)
     if (local_on_ && !LocalDev().empty()) {
       std::vector<int16_t> s(kBlock * 2);
       for (int i = 0; i < kBlock * 2; i++) s[i] = (int16_t)std::lrintf(std::clamp(blk[i], -1.f, 1.f) * 32767.f);

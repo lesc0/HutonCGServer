@@ -23,6 +23,7 @@ class TsMuxer {
   static constexpr int kAudioFrame = 1024;
   static constexpr int kAudioRate = 48000;
   bool WriteAudio(const float* pcm, std::chrono::steady_clock::time_point block_start);
+  bool WriteAudioNs(const float* pcm, int64_t pts_ns);   // pts_ns: CLOCK_MONOTONIC ns (라이브 음성은 ALSA tstamp)
   void Close();
 
  private:

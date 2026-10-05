@@ -27,6 +27,9 @@ class AudioMixer {
   // 라이브 입력(HDMI): 약간의 지연(kLiveLatency)을 두고 이어 붙인다. 어긋나면 재동기.
   // ts_ns: 첫 샘플의 캡처 timestamp(CLOCK_MONOTONIC ns, ALSA). 있으면 그 시각 기준으로 배치(PTS = 캡처 시각 + kLiveLatency). 0 이면 지금 시각.
   void PushLive(const float* pcm, int n, int64_t ts_ns = 0);
+  // 라이브 음성 직접 송출: pcm 을 믹서를 거치지 않고 1024샘플 블록으로 모아, ts_ns(ALSA tstamp)를 PTS 로 mux 에 바로 쓴다.
+  // 이게 들어오는 동안(마지막 호출 후 300ms)은 믹서 블록의 송출(WriteAudio)을 건너뛴다. 로컬 재생용 믹서 경로(PushLive)는 그대로.
+  void WriteLiveDirect(const float* pcm, int n, int64_t ts_ns);
   void Clear();   // 아직 재생되지 않은 음성 폐기 (영상 정지/교체 시)
 
   // 로컬 재생: 송출(AAC)과 같은 믹스를 이 ALSA 장치로도 내보낸다(예: "plughw:CARD=rockchiphdmi1,DEV=0"). 비면 안 함. Start() 전에 지정.
@@ -49,6 +52,8 @@ class AudioMixer {
   std::vector<float> ring_ = std::vector<float>(kCap * 2, 0.f);
   int64_t pos_ = 0;        // 다음에 인코딩할 샘플 위치
   int64_t live_pos_ = -1;
+  std::vector<float> ld_buf_;                      // WriteLiveDirect 가 모으는 중인 샘플(스테레오 인터리브). AudioRun 스레드만 사용
+  std::atomic<int64_t> ld_until_ns_{0};            // 이 시각(steady ns)까지는 라이브 직접 송출 중
 
   std::string LocalDev() { std::lock_guard<std::mutex> lk(lmu_); return local_dev_; }
   bool local_on_ = false;     // 로컬 재생 사용(장치가 아직 없어도 스레드는 돌며 기다림)
